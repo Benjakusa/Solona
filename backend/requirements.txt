@@ -1,0 +1,14 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+SQLAlchemy>=2.0,<3
+alembic>=1.15,<2
+psycopg[binary]>=3.2,<4
+pydantic-settings>=2.8,<3
+PyJWT>=2.10,<3
+argon2-cffi>=23.1,<26
+slowapi>=0.1.9,<1
+limits[redis]>=3.13,<6
+
+# Test dependencies
+pytest>=8.3,<9
+httpx>=0.28,<1
