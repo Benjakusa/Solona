@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import Principal, authorize_shop, authorize_tenant, current_plan, require_subscription, current_principal
 from app.core.config import get_settings
 from app.core.errors import ApiError
+from app.core.rbac import assert_can_modify_membership, lock_tenant_memberships
 from app.core.rate_limit import limiter
 from app.core.security import hash_token
 from app.db.session import get_db, set_tenant_context
@@ -27,15 +28,34 @@ from app.services.audit import record_audit
 router = APIRouter(tags=["tenant and shop management"])
 
 
+def _check_membership_policy(db: Session, *, tenant_id: UUID, actor_id: UUID,
+                             actor_role: str | None, target_id: UUID | None,
+                             target_current_role: str | None, target_new_role: str | None,
+                             operation: str) -> None:
+    try:
+        assert_can_modify_membership(actor_role, target_current_role, target_new_role)
+    except ApiError as error:
+        record_audit(
+            db, tenant_id=tenant_id, actor_id=actor_id, action="staff.permission_denied",
+            resource_type="membership", resource_id=target_id,
+            details={"operation": operation, "actor_role": actor_role,
+                     "target_current_role": target_current_role,
+                     "attempted_role": target_new_role},
+        )
+        # Preserve the denied-attempt audit even though the request raises.
+        db.commit()
+        raise error
+
+
 @router.get("/tenants/{tenant_id}")
-def get_tenant(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def get_tenant(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "tenant:read")
     tenant = db.get(Tenant, tenant_id)
     return {"id": str(tenant.id), "name": tenant.name, "slug": tenant.slug, "business_details": tenant.business_details}
 
 
 @router.patch("/tenants/{tenant_id}")
-def update_tenant(tenant_id: UUID, payload: TenantPatch, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def update_tenant(tenant_id: UUID, payload: TenantPatch, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "tenant:manage")
     tenant = db.get(Tenant, tenant_id)
     for key, value in payload.model_dump(exclude_unset=True).items():
@@ -45,7 +65,7 @@ def update_tenant(tenant_id: UUID, payload: TenantPatch, principal: Principal = 
 
 
 @router.get("/tenants/{tenant_id}/shops")
-def list_shops(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def list_shops(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "tenant:read")
     query = select(Shop).where(Shop.tenant_id == tenant_id, Shop.is_active.is_(True))
     if not membership.all_shops:
@@ -55,7 +75,7 @@ def list_shops(tenant_id: UUID, principal: Principal = Depends(current_principal
 
 
 @router.post("/tenants/{tenant_id}/shops", status_code=201)
-def create_shop(tenant_id: UUID, payload: ShopCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def create_shop(tenant_id: UUID, payload: ShopCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "tenant:manage")
     require_subscription(db, tenant_id)
     plan = current_plan(db, tenant_id)
@@ -70,7 +90,7 @@ def create_shop(tenant_id: UUID, payload: ShopCreate, principal: Principal = Dep
 
 
 @router.patch("/tenants/{tenant_id}/shops/{shop_id}")
-def update_shop(tenant_id: UUID, shop_id: UUID, payload: ShopPatch, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def update_shop(tenant_id: UUID, shop_id: UUID, payload: ShopPatch, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "tenant:manage")
     authorize_shop(db, membership, shop_id, allow_inactive=True)
     shop = db.get(Shop, shop_id)
@@ -82,11 +102,23 @@ def update_shop(tenant_id: UUID, shop_id: UUID, payload: ShopPatch, principal: P
 
 @router.post("/tenants/{tenant_id}/invitations", status_code=201)
 @limiter.limit("20/hour")
-def invite_user(request: Request, tenant_id: UUID, payload: InvitationCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    authorize_tenant(db, principal, tenant_id, "staff:manage")
+def invite_user(request: Request, tenant_id: UUID, payload: InvitationCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+    actor_membership = authorize_tenant(db, principal, tenant_id, "staff:manage")
+    lock_tenant_memberships(db, tenant_id)
+    actor_role = db.get(Role, actor_membership.role_id)
     role = db.scalar(select(Role).where(Role.tenant_id == tenant_id, Role.name == payload.role))
     if role is None:
         raise ApiError(404, "role_not_found", "Role not found.")
+    if payload.email.casefold() == principal.user.email.casefold():
+        _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                                 actor_role=actor_role.name if actor_role else None,
+                                 target_id=None, target_current_role=None,
+                                 target_new_role=role.name, operation="invite_self")
+        raise ApiError(409, "cannot_invite_self", "You cannot invite yourself to another membership.")
+    _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                             actor_role=actor_role.name if actor_role else None,
+                             target_id=None, target_current_role=None,
+                             target_new_role=role.name, operation="invite")
     if len(payload.shop_ids) != len(set(payload.shop_ids)):
         raise ApiError(422, "invalid_shop_assignment", "A shop may only be assigned once.")
     for shop_id in payload.shop_ids:
@@ -113,7 +145,7 @@ def invite_user(request: Request, tenant_id: UUID, payload: InvitationCreate, pr
 
 
 @router.get("/tenants/{tenant_id}/roles")
-def list_roles(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def list_roles(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "staff:manage")
     rows = db.execute(
         select(Role, Permission.code)
@@ -131,7 +163,7 @@ def list_roles(tenant_id: UUID, principal: Principal = Depends(current_principal
 
 
 @router.get("/tenants/{tenant_id}/memberships")
-def list_memberships(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def list_memberships(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "staff:manage")
     rows = db.execute(
         select(TenantMembership, User, Role)
@@ -148,31 +180,81 @@ def list_memberships(tenant_id: UUID, principal: Principal = Depends(current_pri
 
 
 @router.patch("/tenants/{tenant_id}/memberships/{membership_id}")
-def deactivate_membership(tenant_id: UUID, membership_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    authorize_tenant(db, principal, tenant_id, "staff:manage")
+def deactivate_membership(tenant_id: UUID, membership_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+    actor_membership = authorize_tenant(db, principal, tenant_id, "staff:manage")
+    lock_tenant_memberships(db, tenant_id)
     membership = db.scalar(select(TenantMembership).where(TenantMembership.tenant_id == tenant_id, TenantMembership.id == membership_id).with_for_update())
     if membership is None:
         raise ApiError(404, "membership_not_found", "Membership not found.")
+    actor_role = db.get(Role, actor_membership.role_id)
+    target_role = db.get(Role, membership.role_id)
     if membership.user_id == principal.user.id:
+        _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                                 actor_role=actor_role.name if actor_role else None,
+                                 target_id=membership.id,
+                                 target_current_role=target_role.name if target_role else None,
+                                 target_new_role=None, operation="deactivate_self")
         raise ApiError(409, "cannot_deactivate_self", "You cannot deactivate your own membership.")
-    role = db.get(Role, membership.role_id)
-    if role and role.name == "owner":
-        owner_count = db.scalar(
-            select(func.count(TenantMembership.id))
-            .join(Role, Role.id == TenantMembership.role_id)
-            .where(TenantMembership.tenant_id == tenant_id, TenantMembership.is_active.is_(True), Role.name == "owner")
-        ) or 0
-        if owner_count <= 1:
+    _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                             actor_role=actor_role.name if actor_role else None,
+                             target_id=membership.id,
+                             target_current_role=target_role.name if target_role else None,
+                             target_new_role=None, operation="deactivate")
+    if membership.is_active and target_role and target_role.name == "owner":
+        # Owners are only allowed to change another owner's active state.
+        # The tenant row lock serializes this count with all other owner changes.
+        other_owner = db.scalar(select(TenantMembership.id).join(
+            Role, Role.id == TenantMembership.role_id).where(
+            TenantMembership.tenant_id == tenant_id,
+            TenantMembership.is_active.is_(True), Role.name == "owner",
+            TenantMembership.id != membership.id).limit(1))
+        if other_owner is None:
             raise ApiError(409, "last_owner", "The last active tenant owner cannot be deactivated.")
     membership.is_active = False
     record_audit(db, tenant_id=tenant_id, actor_id=principal.user.id, action="staff.deactivated", resource_type="membership", resource_id=membership.id)
     return OkResponse()
 
 
+@router.patch("/tenants/{tenant_id}/memberships/{membership_id}/reactivate", response_model=OkResponse)
+def reactivate_membership(tenant_id: UUID, membership_id: UUID,
+                          principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+    actor_membership = authorize_tenant(db, principal, tenant_id, "staff:manage")
+    lock_tenant_memberships(db, tenant_id)
+    membership = db.scalar(select(TenantMembership).where(
+        TenantMembership.tenant_id == tenant_id,
+        TenantMembership.id == membership_id,
+    ).with_for_update())
+    if membership is None:
+        raise ApiError(404, "membership_not_found", "Membership not found.")
+    actor_role = db.get(Role, actor_membership.role_id)
+    target_role = db.get(Role, membership.role_id)
+    if membership.user_id == principal.user.id:
+        _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                                 actor_role=actor_role.name if actor_role else None,
+                                 target_id=membership.id,
+                                 target_current_role=target_role.name if target_role else None,
+                                 target_new_role=target_role.name if target_role else None,
+                                 operation="reactivate_self")
+        raise ApiError(409, "cannot_change_self_membership", "You cannot reactivate your own membership.")
+    _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                             actor_role=actor_role.name if actor_role else None,
+                             target_id=membership.id,
+                             target_current_role=target_role.name if target_role else None,
+                             target_new_role=target_role.name if target_role else None,
+                             operation="reactivate")
+    if not membership.is_active:
+        membership.is_active = True
+        record_audit(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                     action="staff.reactivated", resource_type="membership",
+                     resource_id=membership.id)
+    return OkResponse()
+
+
 @router.patch("/tenants/{tenant_id}/memberships/{membership_id}/role")
 def update_membership_role(tenant_id: UUID, membership_id: UUID, payload: MembershipRolePatch,
-                           principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+                           principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     actor_membership = authorize_tenant(db, principal, tenant_id, "staff:manage")
+    lock_tenant_memberships(db, tenant_id)
     actor_role = db.get(Role, actor_membership.role_id)
     membership = db.scalar(select(TenantMembership).where(
         TenantMembership.tenant_id == tenant_id, TenantMembership.id == membership_id,
@@ -182,15 +264,26 @@ def update_membership_role(tenant_id: UUID, membership_id: UUID, payload: Member
     target_role = db.scalar(select(Role).where(Role.tenant_id == tenant_id, Role.name == payload.role))
     if target_role is None:
         raise ApiError(404, "role_not_found", "Role not found.")
-    if target_role.name in {"owner", "administrator"} and (actor_role is None or actor_role.name != "owner"):
-        raise ApiError(403, "owner_required", "Only a tenant owner can assign an owner or administrator role.")
     current_role = db.get(Role, membership.role_id)
+    if membership.user_id == principal.user.id:
+        _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                                 actor_role=actor_role.name if actor_role else None,
+                                 target_id=membership.id,
+                                 target_current_role=current_role.name if current_role else None,
+                                 target_new_role=target_role.name, operation="change_self_role")
+        raise ApiError(409, "cannot_change_self_role", "You cannot change your own membership role.")
+    _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                             actor_role=actor_role.name if actor_role else None,
+                             target_id=membership.id,
+                             target_current_role=current_role.name if current_role else None,
+                             target_new_role=target_role.name, operation="change_role")
     if membership.is_active and current_role and current_role.name == "owner" and target_role.name != "owner":
-        active_owners = db.scalar(select(func.count(TenantMembership.id)).join(
+        other_owner = db.scalar(select(TenantMembership.id).join(
             Role, Role.id == TenantMembership.role_id).where(
-            TenantMembership.tenant_id == tenant_id, TenantMembership.is_active.is_(True),
-            Role.name == "owner")) or 0
-        if active_owners <= 1:
+            TenantMembership.tenant_id == tenant_id,
+            TenantMembership.is_active.is_(True), Role.name == "owner",
+            TenantMembership.id != membership.id).limit(1))
+        if other_owner is None:
             raise ApiError(409, "last_owner", "The last active tenant owner cannot be demoted.")
     membership.role_id = target_role.id
     record_audit(db, tenant_id=tenant_id, actor_id=principal.user.id,
@@ -200,11 +293,28 @@ def update_membership_role(tenant_id: UUID, membership_id: UUID, payload: Member
 
 
 @router.put("/tenants/{tenant_id}/memberships/{membership_id}/shops")
-def assign_membership_shops(tenant_id: UUID, membership_id: UUID, shop_ids: list[UUID], principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    authorize_tenant(db, principal, tenant_id, "staff:manage")
+def assign_membership_shops(tenant_id: UUID, membership_id: UUID, shop_ids: list[UUID], principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+    actor_membership = authorize_tenant(db, principal, tenant_id, "staff:manage")
+    lock_tenant_memberships(db, tenant_id)
     membership = db.scalar(select(TenantMembership).where(TenantMembership.tenant_id == tenant_id, TenantMembership.id == membership_id))
     if membership is None:
         raise ApiError(404, "membership_not_found", "Membership not found.")
+    actor_role = db.get(Role, actor_membership.role_id)
+    target_role = db.get(Role, membership.role_id)
+    if membership.user_id == principal.user.id:
+        _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                                 actor_role=actor_role.name if actor_role else None,
+                                 target_id=membership.id,
+                                 target_current_role=target_role.name if target_role else None,
+                                 target_new_role=target_role.name if target_role else None,
+                                 operation="assign_shops_self")
+        raise ApiError(409, "cannot_change_self_membership", "You cannot change your own membership.")
+    _check_membership_policy(db, tenant_id=tenant_id, actor_id=principal.user.id,
+                             actor_role=actor_role.name if actor_role else None,
+                             target_id=membership.id,
+                             target_current_role=target_role.name if target_role else None,
+                             target_new_role=target_role.name if target_role else None,
+                             operation="assign_shops")
     if not membership.is_active:
         raise ApiError(409, "membership_inactive", "Reactivate the membership before changing shop assignments.")
     if membership.all_shops:
@@ -222,7 +332,7 @@ def assign_membership_shops(tenant_id: UUID, membership_id: UUID, shop_ids: list
 
 @router.post("/tenants/{tenant_id}/devices", status_code=201)
 @limiter.limit("20/hour")
-def register_device(request: Request, tenant_id: UUID, payload: DeviceCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def register_device(request: Request, tenant_id: UUID, payload: DeviceCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "device:manage")
     authorize_shop(db, membership, payload.shop_id)
     require_subscription(db, tenant_id)
@@ -239,7 +349,7 @@ def register_device(request: Request, tenant_id: UUID, payload: DeviceCreate, pr
 
 
 @router.get("/tenants/{tenant_id}/devices")
-def list_devices(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def list_devices(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "device:manage")
     query = select(Device).where(Device.tenant_id == tenant_id)
     if not membership.all_shops:
@@ -249,11 +359,12 @@ def list_devices(tenant_id: UUID, principal: Principal = Depends(current_princip
 
 
 @router.delete("/tenants/{tenant_id}/devices/{device_id}", response_model=OkResponse)
-def revoke_device(tenant_id: UUID, device_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
-    authorize_tenant(db, principal, tenant_id, "device:manage")
+def revoke_device(tenant_id: UUID, device_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+    membership = authorize_tenant(db, principal, tenant_id, "device:manage")
     device = db.scalar(select(Device).where(Device.tenant_id == tenant_id, Device.id == device_id).with_for_update())
     if device is None:
         raise ApiError(404, "device_not_found", "Device not found.")
+    authorize_shop(db, membership, device.shop_id, allow_inactive=True)
     if device.revoked_at is None:
         device.revoked_at = datetime.now(timezone.utc)
     record_audit(db, tenant_id=tenant_id, actor_id=principal.user.id, action="device.revoked", resource_type="device", resource_id=device.id, shop_id=device.shop_id)
@@ -288,7 +399,7 @@ def _summary(tenant_id: UUID, shop_id: UUID | None, db: Session, accessible_shop
 
 
 @router.get("/tenants/{tenant_id}/summary", response_model=SummaryResponse)
-def tenant_summary(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def tenant_summary(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "tenant:read")
     authorize_tenant(db, principal, tenant_id, "sales:read")
     authorize_tenant(db, principal, tenant_id, "inventory:read")
@@ -299,7 +410,7 @@ def tenant_summary(tenant_id: UUID, principal: Principal = Depends(current_princ
 
 
 @router.get("/tenants/{tenant_id}/shops/{shop_id}/summary", response_model=SummaryResponse)
-def shop_summary(tenant_id: UUID, shop_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def shop_summary(tenant_id: UUID, shop_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "sales:read")
     authorize_tenant(db, principal, tenant_id, "inventory:read")
     authorize_shop(db, membership, shop_id)

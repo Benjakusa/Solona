@@ -602,8 +602,8 @@ def test_offline_return_replay_is_audited_idempotent_and_reduces_customer_credit
         "event_type": "sale.created", "aggregate_id": "return-sale", "schema_version": 1,
         "occurred_at": "2026-10-12T10:00:00Z",
         "payload": {"invoice_no": "RETURN-INV-1", "cashier_cloud_id": workspace["user_id"],
-                    "customer_cloud_id": customer["id"], "total_amount": 10, "discount": 0,
-                    "tax": 0, "credit_amount": 10, "amount_paid": 0, "payment_method": "credit",
+                    "customer_cloud_id": customer["id"], "total_amount": 9, "discount": 2,
+                    "tax": 1, "credit_amount": 9, "amount_paid": 0, "payment_method": "credit",
                     "lines": [{"cloud_medicine_id": batch["medicine_id"], "cloud_batch_id": batch["id"],
                                "cloud_sale_item_id": str(line_id), "quantity": 2,
                                "unit_price": 5, "unit_cost": 3.25, "subtotal": 10}]},
@@ -620,7 +620,7 @@ def test_offline_return_replay_is_audited_idempotent_and_reduces_customer_credit
             "payload": {"sale_transaction_id": str(sale_transaction_id),
                         "cloud_sale_item_id": str(line_id), "cloud_batch_id": batch["id"],
                         "cashier_cloud_id": workspace["user_id"], "quantity": 1,
-                        "refund_amount": 5, "credit_reduction": 5, "reason": "Customer returned sealed item"},
+                        "refund_amount": 4.5, "credit_reduction": 4.5, "reason": "Customer returned sealed item"},
         }
 
     # A failure after stock/credit writes still rolls the return and inbox back.
@@ -643,7 +643,7 @@ def test_offline_return_replay_is_audited_idempotent_and_reduces_customer_credit
         item_before = db.get(SaleItem, line_id)
         customer_before = db.get(Customer, UUID(customer["id"]))
         assert item_before.returned_qty == 0
-        assert customer_before.credit_balance == Decimal("10.00")
+        assert customer_before.credit_balance == Decimal("9.00")
         assert db.scalar(select(SaleReturn.id).where(SaleReturn.transaction_id == UUID(rolled_back["transaction_id"]))) is None
         assert db.scalar(select(SyncEvent.id).where(SyncEvent.event_id == UUID(rolled_back["event_id"]))) is None
 
@@ -678,7 +678,7 @@ def test_offline_return_replay_is_audited_idempotent_and_reduces_customer_credit
         movements = db.scalars(select(StockMovement).where(
             StockMovement.transaction_id.in_([UUID(first_return["transaction_id"]), UUID(second_return["transaction_id"])]),
         )).all()
-        assert sale.status == "refunded" and sale.amount_paid == Decimal("10.00")
+        assert sale.status == "refunded" and sale.amount_paid == Decimal("9.00")
         assert item.returned_qty == 2
         assert customer_record.credit_balance == Decimal("0.00")
         assert len(returns) == 2 and all(row.cash_refund == Decimal("0.00") for row in returns)

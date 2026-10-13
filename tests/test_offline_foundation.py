@@ -203,11 +203,13 @@ def test_first_run_has_no_shared_password_and_recovery_requires_owner_pin(local_
     assert admin is None
     assert not auth.verify_recovery_pin("anything")
     with pytest.raises(ValueError):
-        auth.recover_admin_access("too-short")
+        auth.recover_admin_access("", "too-short")
     auth.set_recovery_pin("owner-recovery-passphrase-9371")
     assert not auth.verify_recovery_pin("wrong-passphrase")
     assert auth.verify_recovery_pin("owner-recovery-passphrase-9371")
-    assert auth.recover_admin_access("new-strong-password-2026") == "admin"
+    with pytest.raises(ValueError, match="Recovery PIN"):
+        auth.recover_admin_access("wrong-passphrase", "new-strong-password-2026")
+    assert auth.recover_admin_access("owner-recovery-passphrase-9371", "new-strong-password-2026") == "admin"
     assert auth.login("admin", "new-strong-password-2026") is not None
 
 
@@ -293,3 +295,246 @@ def test_online_cloud_user_cache_obeys_expiry(local_db):
     conn.commit()
     conn.close()
     assert auth.login("owner@example.test", "local-cache-password") is None
+
+
+def test_wp3_refund_respects_sale_discount_tax_and_partial_returns(local_db):
+    medicine = make_medicine(10)
+    cart = Cart()
+    cart.add(medicine, 10)
+    cart.discount = 25.0
+    cart.tax_percent = 20.0
+    sale = sales.checkout(cart, cashier_id=1, payment_method="cash")
+    conn = db_manager.get_connection()
+    line_id = conn.execute("SELECT id FROM sale_items WHERE sale_id=?", (sale["sale_id"],)).fetchone()[0]
+    conn.close()
+
+    first = sales.process_return(line_id, 5, "Partial return", 1)
+    second = sales.process_return(line_id, 5, "Remaining return", 1)
+
+    assert first["refund_amount"] == 15.0
+    assert second["refund_amount"] == 15.0
+    assert first["refund_amount"] + second["refund_amount"] == sale["total"]
+
+
+def test_wp4_expiry_alert_uses_each_in_stock_batch(local_db):
+    from datetime import date, timedelta
+
+    soon = (date.today() + timedelta(days=5)).isoformat()
+    later = (date.today() + timedelta(days=300)).isoformat()
+    medicine = inventory.add_medicine(
+        "Short dated medicine", "", "Test", "EXP-SOON", soon,
+        10, 2.0, 5.0, None,
+    )
+    suppliers.record_purchase_order(medicine.id, 50, "EXP-LATER", later, 2.0)
+
+    alerts = inventory.expiring_medicines(30)
+
+    assert any(row.id == medicine.id and row.expiry_date == soon for row in alerts)
+
+
+def test_wp8_backup_retention_never_unlinks_a_path_from_database(local_db, tmp_path):
+    victim = tmp_path / "keep.txt"
+    victim.write_text("important")
+    conn = db_manager.get_connection()
+    conn.execute(
+        "INSERT INTO backup_log(filename,size,type,date) VALUES(?,1,'auto','2000-01-01')",
+        (str(victim),),
+    )
+    for index in range(15):
+        conn.execute(
+            "INSERT INTO backup_log(filename,size,type,date) VALUES(?,1,'auto',?)",
+            (str(tmp_path / f"backup-{index}.db"), f"2001-01-{index + 1:02d}"),
+        )
+    conn.commit()
+    conn.close()
+
+    backup._enforce_auto_retention()
+
+    assert victim.read_text() == "important"
+
+
+def test_wp8_backup_delete_rejects_traversal_and_symlink(local_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(backup, "DATA_DIR", tmp_path / "data")
+    backup.BACKUP_DIR.mkdir(exist_ok=True)
+    backup.DATA_DIR.mkdir(exist_ok=True)
+    victim = tmp_path / "victim.db"
+    victim.write_text("do not delete")
+    link = backup.BACKUP_DIR / "linked.db"
+    link.symlink_to(victim)
+    conn = db_manager.get_connection()
+    for name in (str(victim), str(link)):
+        conn.execute("INSERT INTO backup_log(filename,size,type) VALUES(?,1,'manual')", (name,))
+    conn.commit()
+    ids = [row[0] for row in conn.execute("SELECT id FROM backup_log ORDER BY id")]
+    conn.close()
+
+    for record_id in ids:
+        with pytest.raises(ValueError):
+            backup.delete_backup(record_id)
+    assert victim.read_text() == "do not delete"
+    assert link.is_symlink()
+
+
+def test_wp5_passwords_require_12_characters_and_bad_hash_is_a_normal_failure(local_db):
+    from logic.security import verify_password
+
+    with pytest.raises(ValueError):
+        auth.create_user("short-pass-user", "abcd", "Short Password", "cashier")
+    assert verify_password("anything", "not-a-valid-hash") is False
+    assert verify_password("anything", "zz$zz") is False
+
+
+def test_wp5_last_active_admin_cannot_be_demoted_or_deactivated(local_db):
+    admin = auth.list_users()[0]
+
+    with pytest.raises(ValueError, match="last active administrator"):
+        auth.update_user(admin.id, admin.full_name, "cashier", False)
+
+    conn = db_manager.get_connection()
+    row = conn.execute("SELECT role,is_active FROM users WHERE id=?", (admin.id,)).fetchone()
+    conn.close()
+    assert row["role"] == "admin" and row["is_active"] == 1
+
+
+def test_wp4_cart_rejects_expired_batches_before_checkout(local_db):
+    from datetime import date, timedelta
+
+    expired = (date.today() - timedelta(days=1)).isoformat()
+    medicine = inventory.add_medicine("Expired lot", "", "Test", "EXPIRED", expired,
+                                       0, 1.0, 2.0, None)
+    conn = db_manager.get_connection()
+    conn.execute("UPDATE medicine_batches SET quantity=3,expiry_date=? WHERE medicine_id=?",
+                 (expired, medicine.id))
+    conn.execute("UPDATE medicines SET quantity=3 WHERE id=?", (medicine.id,))
+    conn.commit()
+    conn.close()
+    cart = Cart()
+
+    with pytest.raises(ValueError, match="sellable"):
+        cart.add(medicine, 1)
+
+
+def test_wp6_cloud_bootstrap_sets_pos_price_from_first_cloud_batch(local_db):
+    snapshot = {
+        "tenant_id": "tenant-pricing", "shop_id": "shop-pricing",
+        "medicines": [{"id": "11111111-1111-1111-1111-111111111111", "sku": "SKU-CLOUD",
+                       "name": "Cloud-priced medicine", "generic_name": "", "is_controlled": False}],
+        "batches": [{"id": "22222222-2222-2222-2222-222222222222",
+                     "medicine_id": "11111111-1111-1111-1111-111111111111",
+                     "batch_no": "CLOUD-LOT", "expiry_date": "2099-01-01", "quantity": 8,
+                     "purchase_cost": "10.00", "selling_price": "25.00"}],
+        "suppliers": [], "customers": [],
+    }
+
+    apply_cloud_bootstrap(snapshot)
+
+    conn = db_manager.get_connection()
+    price = conn.execute("SELECT sale_price FROM medicines WHERE cloud_uuid=?",
+                         ("11111111-1111-1111-1111-111111111111",)).fetchone()[0]
+    conn.close()
+    assert price == 25.0
+
+
+def test_wp3_profit_report_uses_historical_cost_discount_and_returns(local_db):
+    from datetime import date
+    from logic import reports
+
+    medicine = make_medicine(4)
+    cart = Cart()
+    cart.add(medicine, 2)
+    cart.discount = 2.0
+    cart.tax_percent = 12.5
+    sale = sales.checkout(cart, cashier_id=1, payment_method="cash")
+    conn = db_manager.get_connection()
+    item = conn.execute("SELECT id FROM sale_items WHERE sale_id=?", (sale["sale_id"],)).fetchone()
+    conn.execute("UPDATE medicines SET purchase_price=9 WHERE id=?", (medicine.id,))
+    conn.commit()
+    conn.close()
+    sales.process_return(item["id"], 1, "Partial", 1)
+
+    report = reports.profit_loss_summary(date.today().isoformat(), date.today().isoformat())
+
+    assert report["revenue"] == 4.5
+    assert report["cost"] == 3.25
+    assert report["profit"] == 1.25
+
+
+def test_wp3_invoice_counter_recovers_after_deleted_invoice_gap(local_db):
+    conn = db_manager.get_connection()
+    identity = conn.execute("SELECT device_id FROM sync_identity WHERE singleton=1").fetchone()[0]
+    from datetime import datetime
+    today = datetime.now().strftime("%Y%m%d")
+    terminal = identity.replace("-", "")[:6].upper()
+    prefix = f"INV-{today}-{terminal}-"
+    conn.execute(
+        "INSERT INTO sales(invoice_no,cashier_id,total_amount) VALUES(?,?,0)",
+        (prefix + "0001", 1),
+    )
+    conn.execute(
+        "INSERT INTO sales(invoice_no,cashier_id,total_amount) VALUES(?,?,0)",
+        (prefix + "0003", 1),
+    )
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    generated = sales._generate_invoice_no(conn)
+    conn.rollback()
+    conn.close()
+
+    assert generated == prefix + "0004"
+
+
+def test_wp4_receipt_explicitly_updates_medicine_selling_price(local_db):
+    medicine = make_medicine(3)
+
+    suppliers.record_purchase_order(medicine.id, 2, "PRICE-LOT", "2099-12-31", 3.25,
+                                    new_sale_price=9.99)
+
+    assert inventory.get_medicine(medicine.id).sale_price == 9.99
+
+
+def test_wp4_editor_cannot_change_stock_without_a_receipt(local_db):
+    medicine = make_medicine(3)
+
+    with pytest.raises(ValueError, match="stock adjustment"):
+        inventory.update_medicine(
+            medicine.id, medicine.name, medicine.generic_name, medicine.category,
+            medicine.batch_no, medicine.expiry_date, 4, medicine.purchase_price,
+            medicine.sale_price, medicine.supplier_id, medicine.low_stock_threshold,
+            barcode=medicine.barcode, manufacturer=medicine.manufacturer,
+            units_per_pack=medicine.units_per_pack,
+        )
+
+
+def test_wp4_positive_adjustment_requires_batch_expiry_cost_and_reason(local_db):
+    medicine = make_medicine(3)
+
+    with pytest.raises(ValueError, match="batch number, expiry date, unit cost, and reason"):
+        inventory.adjust_stock(medicine.id, 2, actor_id=1)
+
+
+def test_wp6_pulled_medicine_update_applies_stock_movement_once(local_db):
+    medicine = make_medicine(10)
+    conn = db_manager.get_connection()
+    batch = conn.execute("SELECT id,cloud_uuid FROM medicine_batches WHERE medicine_id=?", (medicine.id,)).fetchone()
+    conn.execute("UPDATE sync_outbox SET status='acked'")
+    conn.commit()
+    change = {
+        "event_id": str(uuid4()), "cursor": 22, "event_type": "medicine.updated",
+        "transaction_id": str(uuid4()),
+        "payload": {"payload": {"payload": {
+            "cloud_medicine_id": conn.execute(
+                "SELECT cloud_uuid FROM medicines WHERE id=?", (medicine.id,)
+            ).fetchone()[0],
+            "name": "Paracetamol", "shop_id": "shop-1", "occurred_at": "2026-10-13T10:00:00Z",
+            "movements": [{"cloud_batch_id": batch["cloud_uuid"], "delta": -3}],
+        }}},
+    }
+
+    _apply_cloud_change(conn, change)
+    conn.commit()
+    assert conn.execute("SELECT quantity FROM medicine_batches WHERE id=?", (batch["id"],)).fetchone()[0] == 7
+    _apply_cloud_change(conn, change)
+    conn.commit()
+    assert conn.execute("SELECT quantity FROM medicine_batches WHERE id=?", (batch["id"],)).fetchone()[0] == 7
+    conn.close()

@@ -10,6 +10,7 @@ Design notes (this module is the app's top priority per spec):
 - Auto-backups are capped (oldest deleted beyond the retention count) so disk
   usage stays bounded; manual backups are never auto-deleted.
 """
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,6 +22,68 @@ from database.db_manager import BACKUP_DIR, DATA_DIR, DB_PATH, get_connection
 # Tables that must be present for a file to be trusted as a real backup of
 # this app's database, rather than some unrelated or corrupted file.
 _REQUIRED_TABLES = {"users", "medicines", "sales", "sale_items", "customers", "suppliers"}
+_BACKUP_ROOTS_FILE = "backup_roots.json"
+
+
+def _registered_backup_roots() -> list[Path]:
+    roots = [Path(BACKUP_DIR), Path(DATA_DIR)]
+    registry = Path(DATA_DIR) / _BACKUP_ROOTS_FILE
+    try:
+        configured = json.loads(registry.read_text(encoding="utf-8"))
+        if isinstance(configured, list):
+            roots.extend(Path(value) for value in configured if isinstance(value, str))
+    except (OSError, ValueError, TypeError):
+        pass
+    resolved = []
+    for root in roots:
+        try:
+            canonical = root.resolve()
+        except OSError:
+            continue
+        if canonical not in resolved:
+            resolved.append(canonical)
+    return resolved
+
+
+def _register_backup_root(root: Path) -> None:
+    canonical = root.resolve()
+    registry = Path(DATA_DIR) / _BACKUP_ROOTS_FILE
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        values = json.loads(registry.read_text(encoding="utf-8"))
+        if not isinstance(values, list):
+            values = []
+    except (OSError, ValueError, TypeError):
+        values = []
+    value = str(canonical)
+    if value not in values:
+        values.append(value)
+        registry.write_text(json.dumps(values), encoding="utf-8")
+
+
+def _managed_backup_path(filename: str) -> Path:
+    """Resolve a backup-log path only within a registered, nonsymlink root."""
+    candidate = Path(filename)
+    if not candidate.is_absolute():
+        candidate = Path(BACKUP_DIR) / candidate
+    try:
+        resolved = candidate.resolve(strict=False)
+    except OSError as exc:
+        raise ValueError("Backup path is not available.") from exc
+    for root in _registered_backup_roots():
+        if not resolved.is_relative_to(root):
+            continue
+        current = candidate
+        while current != current.parent and current != root:
+            if current.is_symlink():
+                raise ValueError("Backup path may not contain symbolic links.")
+            current = current.parent
+        if current != root:
+            continue
+        if candidate.exists() and not candidate.is_file():
+            raise ValueError("Backup path is not a regular file.")
+        return candidate
+    raise ValueError("Backup path is outside the registered backup folders.")
 
 
 def _validate_backup_file(path: Path) -> None:
@@ -96,6 +159,7 @@ def create_backup(destination_dir: Optional[str] = None, backup_type: str = "man
 
     target_dir = Path(destination_dir) if destination_dir else BACKUP_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
+    _register_backup_root(target_dir)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     base_name = f"backup_{timestamp}.db"
@@ -139,7 +203,11 @@ def _enforce_auto_retention():
             "SELECT * FROM backup_log WHERE type='auto' ORDER BY date DESC"
         ).fetchall()
         for row in rows[AUTO_BACKUP_RETENTION:]:
-            path = Path(row["filename"])
+            try:
+                path = _managed_backup_path(row["filename"])
+            except ValueError:
+                # Preserve suspicious rows for review and never unlink their target.
+                continue
             if path.exists():
                 path.unlink(missing_ok=True)
             conn.execute("DELETE FROM backup_log WHERE id = ?", (row["id"],))
@@ -156,7 +224,14 @@ def list_backups() -> list[BackupRecord]:
     finally:
         conn.close()
     # Drop entries whose file has gone missing (e.g. deleted outside the app).
-    return [r for r in records if Path(r.filename).exists()]
+    safe_records = []
+    for record in records:
+        try:
+            if _managed_backup_path(record.filename).is_file():
+                safe_records.append(record)
+        except ValueError:
+            continue
+    return safe_records
 
 
 def delete_backup(record_id: int) -> None:
@@ -165,7 +240,7 @@ def delete_backup(record_id: int) -> None:
         row = conn.execute("SELECT * FROM backup_log WHERE id=?", (record_id,)).fetchone()
         if row is None:
             raise ValueError("Backup record not found.")
-        path = Path(row["filename"])
+        path = _managed_backup_path(row["filename"])
         if path.exists():
             path.unlink()
         conn.execute("DELETE FROM backup_log WHERE id=?", (record_id,))

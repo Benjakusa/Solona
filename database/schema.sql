@@ -161,3 +161,11 @@ CREATE INDEX IF NOT EXISTS idx_customer_payments_customer ON customer_payments(c
 CREATE INDEX IF NOT EXISTS idx_supplier_payments_supplier ON supplier_payments(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_sale_returns_sale ON sale_returns(sale_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+
+-- Monotonic per-terminal invoice sequence; gaps are allowed, reuse is not.
+CREATE TABLE IF NOT EXISTS invoice_counters (
+    device_id       TEXT NOT NULL,
+    business_date   TEXT NOT NULL,
+    last_value      INTEGER NOT NULL CHECK (last_value >= 0),
+    PRIMARY KEY (device_id, business_date)
+);

@@ -186,7 +186,7 @@ class LoginWindow(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        username = auth.recover_admin_access(new_password)
+        username = auth.recover_admin_access(pin, new_password)
         audit.log(None, "(recovery)", "admin_password_reset", f"admin account '{username}' reset via Recovery PIN")
         QMessageBox.information(
             self,

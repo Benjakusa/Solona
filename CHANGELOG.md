@@ -26,3 +26,12 @@
 - Documented current SQLite entities, target Platform → Tenant → Shop → Device ownership, identity migration, and reconciliation strategy.
 - Recorded security findings, limitations, runtime/test baseline, and implementation status.
 - No application code, schema, dependency, or pharmacy workflow was changed.
+
+## Unreleased — Production hardening in progress
+
+- Hardened backend membership changes and invitation authority checks; backend database commits now complete before responses are sent.
+- Added cent-accurate discount, tax, and partial-return allocations; improved historical-cost profit reporting and invoice counter recovery.
+- Improved batch-expiry handling, traceable stock adjustments, purchase selling-price updates, password validation, and recovery controls.
+- Improved synchronization replay for stock movements, purchase values, bootstrap prices, and original event timestamps.
+- Hardened LAN device enrollment and credential storage, and constrained backup path operations.
+- Rewrote the project README and added audit, decision, and production-readiness records. Overall release readiness remains incomplete; see PRODUCTION_READINESS.md.

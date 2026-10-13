@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import Principal, current_principal, optional_principal
 from app.core.config import get_settings
 from app.core.errors import ApiError
+from app.core.rbac import assert_can_modify_membership, lock_tenant_memberships
 from app.core.rate_limit import limiter
 from app.core.security import (
     create_access_token, hash_password, hash_token, new_refresh_token, verify_password,
@@ -60,7 +61,7 @@ def issue_tokens(db: Session, user: User, family_id: UUID | None = None) -> Toke
 
 @router.post("/register-tenant", response_model=TenantRegistrationResponse, status_code=201)
 @limiter.limit("3/hour")
-def register_tenant(request: Request, payload: RegisterTenant, db: Session = Depends(get_db)):
+def register_tenant(request: Request, payload: RegisterTenant, db: Session = Depends(get_db, scope="function")):
     if db.scalar(select(User.id).where(User.email == payload.owner_email)):
         raise ApiError(409, "email_in_use", "An account with that email already exists.")
     if db.scalar(select(Tenant.id).where(Tenant.slug == payload.tenant_slug)):
@@ -121,7 +122,7 @@ def register_tenant(request: Request, payload: RegisterTenant, db: Session = Dep
 
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")
-def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db, scope="function")):
     user = db.scalar(select(User).where(User.email == payload.email))
     if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
         raise ApiError(401, "invalid_credentials", "Email or password is incorrect.")
@@ -129,7 +130,7 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 
 
 @router.get("/workspaces")
-def list_workspaces(principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def list_workspaces(principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     """Discover only the authenticated user's active tenant/shop grants."""
     from app.models import Shop, ShopAssignment
 
@@ -170,7 +171,7 @@ def list_workspaces(principal: Principal = Depends(current_principal), db: Sessi
 
 @router.post("/refresh", response_model=TokenResponse)
 @limiter.limit("10/minute")
-def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
+def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db, scope="function")):
     token_hash = hash_token(payload.refresh_token)
     session = db.scalar(select(AuthSession).where(AuthSession.refresh_token_hash == token_hash).with_for_update())
     now = datetime.now(timezone.utc)
@@ -200,7 +201,7 @@ def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get
 
 
 @router.post("/logout", response_model=OkResponse)
-def logout(principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def logout(principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     session = db.get(AuthSession, principal.session_id)
     if session and session.revoked_at is None:
         session.revoked_at = datetime.now(timezone.utc)
@@ -209,12 +210,13 @@ def logout(principal: Principal = Depends(current_principal), db: Session = Depe
 
 @router.post("/accept-invitation", response_model=OkResponse)
 @limiter.limit("10/hour")
-def accept_invitation(request: Request, payload: InvitationAccept, principal: Principal | None = Depends(optional_principal), db: Session = Depends(get_db)):
+def accept_invitation(request: Request, payload: InvitationAccept, principal: Principal | None = Depends(optional_principal), db: Session = Depends(get_db, scope="function")):
     try:
         tenant_id = UUID(payload.token.split(".", 1)[0])
     except (ValueError, IndexError):
         raise ApiError(400, "invalid_invitation", "The invitation is invalid or expired.") from None
     set_tenant_context(db, tenant_id)
+    lock_tenant_memberships(db, tenant_id)
     invitation = db.scalar(
         select(UserInvitation).where(UserInvitation.token_hash == hash_token(payload.token)).with_for_update()
     )
@@ -226,7 +228,29 @@ def accept_invitation(request: Request, payload: InvitationAccept, principal: Pr
     role = db.get(Role, invitation.role_id)
     if role is None or role.tenant_id != invitation.tenant_id:
         raise ApiError(400, "invalid_invitation", "The invitation is invalid or expired.")
+    inviter_membership = db.execute(
+        select(TenantMembership, Role)
+        .join(Role, Role.id == TenantMembership.role_id)
+        .where(TenantMembership.tenant_id == tenant_id,
+               TenantMembership.user_id == invitation.created_by,
+               TenantMembership.is_active.is_(True))
+        .with_for_update()
+    ).first()
+    inviter_role = inviter_membership[1].name if inviter_membership else None
+    try:
+        assert_can_modify_membership(inviter_role, None, role.name)
+    except ApiError as error:
+        record_audit(db, tenant_id=tenant_id, actor_id=invitation.created_by,
+                     action="staff.permission_denied", resource_type="invitation",
+                     resource_id=invitation.id,
+                     details={"operation": "accept_invitation", "actor_role": inviter_role,
+                              "target_current_role": None, "attempted_role": role.name})
+        db.commit()
+        raise ApiError(403, "inviter_permission_revoked",
+                       "The inviter no longer has permission to grant this role.") from error
     user = db.scalar(select(User).where(User.email == invitation.email))
+    if user is not None and user.id == invitation.created_by:
+        raise ApiError(409, "cannot_accept_own_invitation", "An inviter cannot accept their own invitation.")
     if user is None:
         if payload.password is None:
             raise ApiError(422, "password_required", "A password is required to create this account.")

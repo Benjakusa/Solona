@@ -414,11 +414,15 @@ def _apply_cloud_change(conn: sqlite3.Connection, change: dict) -> None:
                 if "sale_price" in fields:
                     conn.execute("UPDATE medicine_batches SET sale_price=? WHERE medicine_id=? AND quantity>0",
                                  (fields["sale_price"], local["id"]))
+            _apply_remote_movements(conn, data, tx_id, event_id)
+        elif local:
+            _flag_remote_conflict(conn, event_id, "local_catalogue_changes_pending",
+                                  {"medicine_id": local["id"], "change": data})
     elif event_type == "sale.created":
         _import_remote_sale(conn, data, tx_id, event_id)
     elif event_type == "purchase.received":
         _import_remote_purchase(conn, data, tx_id, event_id)
-    elif event_type in {"stock.adjusted", "medicine.updated"}:
+    elif event_type == "stock.adjusted":
         _apply_remote_movements(conn, data, tx_id, event_id)
     elif event_type == "medicine.deactivated":
         conn.execute("UPDATE medicines SET is_active=0 WHERE cloud_uuid=?", (data.get("cloud_medicine_id"),))
@@ -581,7 +585,11 @@ def apply_cloud_bootstrap(snapshot: dict) -> None:
         if identity["tenant_id"] and (identity["tenant_id"] != tenant_id or identity["shop_id"] != shop_id):
             raise ValueError("This local database is already linked to a different tenant or shop.")
         medicine_map = {}
+        batch_prices = {}
+        for batch in sorted(snapshot.get("batches", []), key=lambda row: (row.get("expiry_date") or "", row.get("batch_no", ""))):
+            batch_prices.setdefault(batch["medicine_id"], batch["selling_price"])
         for remote in snapshot.get("medicines", []):
+            sale_price = float(remote.get("sale_price", batch_prices.get(remote["id"], 0)))
             local = conn.execute("SELECT * FROM medicines WHERE cloud_uuid=?", (remote["id"],)).fetchone()
             if local is None and remote.get("barcode"):
                 local = conn.execute("SELECT * FROM medicines WHERE barcode=? AND is_active=1", (remote["barcode"],)).fetchone()
@@ -597,7 +605,7 @@ def apply_cloud_bootstrap(snapshot: dict) -> None:
                     "INSERT INTO medicines(name,generic_name,manufacturer,category,barcode,quantity,purchase_price,sale_price,cloud_uuid,cloud_sku,is_controlled_substance) "
                     "VALUES(?,?,?,?,?,0,?,?,?,?,?)",
                     (remote["name"], remote.get("generic_name"), remote.get("manufacturer"),
-                     remote.get("category"), remote.get("barcode"), 0, 0, remote["id"],
+                     remote.get("category"), remote.get("barcode"), 0, sale_price, remote["id"],
                      remote.get("sku"), int(remote.get("is_controlled", False))),
                 )
                 local_id = cur.lastrowid
@@ -608,10 +616,10 @@ def apply_cloud_bootstrap(snapshot: dict) -> None:
                                           {"local_medicine_id": local_id, "cloud_medicine_id": remote["id"]})
                     continue
                 conn.execute(
-                    "UPDATE medicines SET cloud_uuid=?,cloud_sku=?,name=?,generic_name=?,manufacturer=?,category=?,barcode=?,is_controlled_substance=? WHERE id=?",
+                    "UPDATE medicines SET cloud_uuid=?,cloud_sku=?,name=?,generic_name=?,manufacturer=?,category=?,barcode=?,is_controlled_substance=?,sale_price=? WHERE id=?",
                     (remote["id"], remote.get("sku"), remote["name"], remote.get("generic_name"),
                      remote.get("manufacturer"), remote.get("category"), remote.get("barcode"),
-                     int(remote.get("is_controlled", False)), local_id),
+                     int(remote.get("is_controlled", False)), sale_price, local_id),
                 )
             medicine_map[remote["id"]] = local_id
 

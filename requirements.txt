@@ -5,3 +5,4 @@ python-barcode==0.16.1
 Pillow==12.3.0
 pyinstaller==6.22.0
 keyring>=25.6,<27
+cryptography>=44,<51

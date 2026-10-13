@@ -1,46 +1,22 @@
 # SOLONA Pharmacy
 
-SOLONA Pharmacy is a PySide6 desktop application for pharmacy sales and operations. It uses a local SQLite database for day-to-day work and includes an optional FastAPI/PostgreSQL service foundation for multi-tenant cloud workflows.
+SOLONA is an offline-capable pharmacy point-of-sale and operations application. The desktop client stores shop data in SQLite. A separate FastAPI/PostgreSQL service and a shop LAN coordinator provide optional synchronization foundations; they are separate deployments and do not automatically import or reconcile an existing shop database.
 
-> **Release status: Internal testing only.** The repository is not ready for production pharmacy operations. Windows deployment, recovery, security, payment-provider, sync-conflict, operational, and Kenyan regulatory checks remain. Read [DEPLOYMENT.md](DEPLOYMENT.md), [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md), and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) before evaluating a release.
+> **Release status: internal evaluation only.** The hardening work is in progress. Do not use this repository as evidence that a pharmacy deployment is production-ready. See [Production readiness](PRODUCTION_READINESS.md), [Audit results](AUDIT_RESULTS.md), and [Decisions](DECISIONS.md) for verified changes and remaining release gates.
 
-## Desktop features
+## What the desktop app does
 
-- Medicine catalogue and stock management, including batch and expiry information, low-stock alerts, barcode lookup, and label generation.
-- Point-of-sale billing with cart, invoices, payment methods, customer credit (udhaar), and partial payments.
-- Customer and supplier records, customer payment history, purchase intake, and supplier payables.
-- Partial and full returns, sales and operations reports, PDF and Excel exports, and receipt printing.
-- Admin and cashier roles, audit history, configurable alerts, and backup/restore.
-- Local offline sales with a durable sync outbox. Cloud login and an optional shop LAN coordinator are available with provisioning and recovery constraints; see [Sync and networking](#sync-and-networking).
+- Catalogue, batch stock, expiry tracking, barcode lookup, and stock alerts
+- Checkout, invoices, payment methods, customer credit, and partial payments
+- Returns, supplier purchases, customer and supplier records
+- Sales and operations reports, exports, receipts, and audit history
+- User administration, local backup and restore, and optional cloud/LAN sync clients
 
-## Screenshots
+Desktop permissions and business rules are still being hardened. Read [SECURITY_MODEL.md](SECURITY_MODEL.md) before relying on role controls.
 
-| Login | Dashboard |
-|---|---|
-| ![Login screen](screenshots/login.png) | ![Dashboard](screenshots/dashboard.png) |
+## Run from source
 
-| Inventory | Billing |
-|---|---|
-| ![Inventory](screenshots/inventory.png) | ![Billing and point of sale](screenshots/billing.png) |
-
-| Customers | Suppliers |
-|---|---|
-| ![Customers](screenshots/customers.png) | ![Suppliers](screenshots/suppliers.png) |
-
-| Reports | Backup and restore |
-|---|---|
-| ![Reports](screenshots/reports.png) | ![Backup and restore](screenshots/backup_restore.png) |
-
-## Requirements
-
-- Python 3.11 or newer is suitable for the desktop source; the packaged Windows build is intended for Windows 10/11 x64.
-- Install the desktop packages from `requirements.txt`.
-- A printer is optional. Receipt printing depends on the operating system and configured printer.
-- The desktop's local features do not require internet access. Cloud sync and online sign-in require a separately deployed backend and network access.
-
-The Windows executable and installer have not been verified on a clean Windows machine. Linux is useful for source work, but the Windows executable must be built on Windows; see [DEPLOYMENT.md](DEPLOYMENT.md).
-
-## Run the desktop app from source
+Requirements: Python 3.11 or newer. Printing is optional and depends on the host operating system and printer setup.
 
 ```bash
 python -m venv .venv
@@ -48,71 +24,48 @@ python -m venv .venv
 # Windows PowerShell
 .venv\Scripts\Activate.ps1
 
-# Linux or macOS: use `source .venv/bin/activate` instead
+# Linux or macOS
+source .venv/bin/activate
+
 python -m pip install -r requirements.txt
 python main.py
 ```
 
-On first launch, SOLONA creates its local database and a unique administrator password. In a development run, the temporary password is printed once in the terminal. Sign in with username `admin`, then change the password. In the packaged Windows app, the temporary password is provisioned through Windows Credential Manager and displayed once. Configure an owner Recovery PIN in Settings and store it securely.
+The first launch initializes a local database and provisions a unique administrator password. For source runs, the temporary credential is printed once in the terminal. Sign in as `admin`, change that password, then configure and securely store a Recovery PIN in Settings.
 
-By default, source runs store the database under `data/pharmacy.db` in the project directory. Set `SOLONA_DB_PATH` to choose a different SQLite file. A packaged Windows installation stores data under `%LOCALAPPDATA%\PharmacyManagementSystem`, outside the application install directory.
+By default, the source database is `data/pharmacy.db`. Set `SOLONA_DB_PATH` to use another path. Packaged Windows builds use `%LOCALAPPDATA%\\PharmacyManagementSystem` for application data.
 
-## Roles and modules
+## Optional backend
 
-**Admins** can manage users, medicines, suppliers, settings, backups, and all other modules. **Cashiers** can use billing and read-only inventory, customers, and reports. User-interface visibility is a convenience boundary; see [SECURITY_MODEL.md](SECURITY_MODEL.md) for the application's security limitations.
+The backend is a separate FastAPI service backed by PostgreSQL. It contains tenant, shop, staff, device, pharmacy-data, synchronization, subscription, and payment integration foundations. Follow [backend/README.md](backend/README.md) for setup and [backend/OPERATIONS.md](backend/OPERATIONS.md) for deployment considerations. Integration tests require a disposable PostgreSQL database configured with `TEST_DATABASE_URL`.
 
-The desktop includes Dashboard, Billing, Returns, Inventory, Customers, Suppliers, Reports, Backup / Restore, and Settings. Cashiers see a restricted subset.
+## Optional shop LAN coordinator
 
-## Backups and data recovery
+The coordinator owns its SQLite database; terminals communicate with it over HTTP and must not open its database file directly. It requires explicit enrollment and a shop-specific enrollment secret. Review [ARCHITECTURE.md](ARCHITECTURE.md), [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md), and [Production readiness](PRODUCTION_READINESS.md) before connecting terminals. Network security, reconciliation, and operational release gates remain open.
 
-Use the in-app Backup / Restore page to create a database backup and review backup history. Automatic backups run during normal app lifecycle events. Before an upgrade or recovery operation, make a backup and follow [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md). Do not copy one shop's database over another shop's data.
+## Backups and recovery
 
-In development, backups are stored in the project `backups/` directory. Packaged Windows data and backups live under `%LOCALAPPDATA%\PharmacyManagementSystem`.
+Use the in-app Backup / Restore screen and follow [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md). Keep backups outside the application's install directory and verify recovery procedures with a copy of shop data before upgrades. Never restore one shop's database over another shop's live data.
 
-## Sync and networking
+## Build for Windows
 
-Cloud sync and LAN coordination are optional foundations; neither should be treated as a guarantee of consistent shared stock during network outages.
-
-- Deploy the API using [backend/README.md](backend/README.md), then use **Sign in online / refresh offline access** in the desktop login screen. Production API connections must use HTTPS.
-- Cached cloud authorization permits offline sign-in for up to 72 hours after a successful online login.
-- A LAN coordinator must be initialized from a verified shop database. All terminals must use the same verified catalogue and batch baseline. Independent legacy databases cannot simply be connected as coordinated terminals.
-- While disconnected from a coordinator, terminals can record local sales, but stock may diverge. Reconnection can raise conflicts for authorized review. Recording a reconciliation note does not post a stock correction automatically.
-- Returns work locally, but cloud replay of returns remains a reconciliation task. Preserve terminal databases and outboxes during coordinator recovery.
-
-Detailed coordinator setup, outage handling, and limitations are documented in [ARCHITECTURE.md](ARCHITECTURE.md), [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md), and [backend/OPERATIONS.md](backend/OPERATIONS.md).
-
-## Backend service
-
-The `backend/` directory contains a separate FastAPI service using PostgreSQL. It provides tenant, shop, staff, device, pharmacy-data, synchronization, subscription, and Daraja integration foundations. It does not replace the desktop's SQLite database or automatically import existing desktop data.
-
-Follow [backend/README.md](backend/README.md) for local setup, environment configuration, migrations, API usage, and integration tests. Use a disposable PostgreSQL database for tests. Production deployment also requires the operational controls in [backend/OPERATIONS.md](backend/OPERATIONS.md); the service foundation is not by itself a production deployment.
-
-## Build a Windows executable and installer
-
-Build on a clean Windows x64 environment. Install the requirements, then run:
+Build on a clean Windows x64 machine. Install the project requirements, then run:
 
 ```powershell
 pyinstaller --clean pharmacy_app.spec
 ```
 
-The executable is written to `dist\SOLONA.exe`. To build the installer, install Inno Setup and run:
+For the installer, install Inno Setup and run `build_windows.ps1`. Packaging, signing, installation, upgrade, printing, and recovery still need clean Windows validation; see [DEPLOYMENT.md](DEPLOYMENT.md).
 
-```powershell
-.\build_windows.ps1
-```
-
-The installer output and signing/release requirements are described in [DEPLOYMENT.md](DEPLOYMENT.md). Test installation, upgrade, printing, keyring behavior, and backup/restore on a clean Windows VM before distributing a build.
-
-## Project layout
+## Repository map
 
 ```text
-main.py                 Desktop entry point
-ui/                     PySide6 windows and views
-logic/                  Desktop business logic and integrations
-database/               SQLite schema, initialization, and migrations
-network/                Optional shop LAN coordinator
-backend/                Separate FastAPI/PostgreSQL service
-screenshots/             UI screenshots
+main.py       Desktop entry point
+ui/           PySide6 screens
+logic/        Desktop business logic
+database/    SQLite schema and initialization
+network/      Optional shop LAN coordinator
+backend/      FastAPI and PostgreSQL service
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for current component boundaries, [DATA_MODEL.md](DATA_MODEL.md) for the data model, and [TESTING.md](TESTING.md) for recorded verification evidence and limitations.
+See [ARCHITECTURE.md](ARCHITECTURE.md), [DATA_MODEL.md](DATA_MODEL.md), [TESTING.md](TESTING.md), and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for more detail.

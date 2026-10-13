@@ -6,6 +6,7 @@ load the shop's opening catalogue, then run it on a trusted shop LAN. All
 writes are serialized with BEGIN IMMEDIATE and keyed by immutable event ID.
 """
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -25,6 +26,29 @@ from logic.sync import utc_now
 class ShopCoordinator:
     def __init__(self, database: Union[str, Path]):
         self.path = str(database)
+        master_key = os.environ.get("SOLONA_LAN_MASTER_KEY", "")
+        if master_key:
+            try:
+                self._master_key = bytes.fromhex(master_key)
+            except ValueError as exc:
+                raise ValueError("SOLONA_LAN_MASTER_KEY must be 64 hexadecimal characters.") from exc
+            if len(self._master_key) != 32:
+                raise ValueError("SOLONA_LAN_MASTER_KEY must contain 32 bytes.")
+        else:
+            key_path = Path(self.path + ".key")
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                self._master_key = bytes.fromhex(key_path.read_text(encoding="ascii").strip())
+            else:
+                self._master_key = secrets.token_bytes(32)
+                with os.fdopen(descriptor, "w", encoding="ascii") as key_file:
+                    key_file.write(self._master_key.hex())
+        if len(self._master_key) != 32:
+            raise ValueError("LAN coordinator master key must contain 32 bytes.")
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        self._cipher = AESGCM(self._master_key)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         with self.connect() as db:
@@ -187,11 +211,24 @@ class ShopCoordinator:
     def enroll_device(self, device_id: str, name: str) -> str:
         device_id = str(uuid.UUID(device_id))
         credential = secrets.token_urlsafe(40)
-        digest = hashlib.sha256(credential.encode()).hexdigest()
+        encrypted_credential = self._encrypt_credential(credential)
         with self.connect() as db:
-            db.execute("INSERT INTO devices VALUES(?,?,?,?,NULL) ON CONFLICT(device_id) DO UPDATE SET name=excluded.name,credential_hash=excluded.credential_hash,revoked_at=NULL",
-                       (device_id, name[:120], digest, utc_now()))
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT revoked_at FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            if existing:
+                db.rollback()
+                if existing["revoked_at"]:
+                    raise PermissionError("A revoked device requires explicit administrator reinstatement.")
+                raise ValueError("Device is already enrolled.")
+            db.execute("INSERT INTO devices VALUES(?,?,?,?,NULL)",
+                       (device_id, name[:120], encrypted_credential, utc_now()))
+            db.commit()
         return credential
+
+    def _encrypt_credential(self, credential: str) -> str:
+        nonce = secrets.token_bytes(12)
+        ciphertext = self._cipher.encrypt(nonce, credential.encode(), b"solona-lan-device-v1")
+        return "enc:" + base64.urlsafe_b64encode(nonce + ciphertext).decode("ascii")
 
     def revoke_device(self, device_id: str) -> bool:
         device_id = str(uuid.UUID(device_id))
@@ -200,10 +237,37 @@ class ShopCoordinator:
                                 (utc_now(), device_id))
             return cursor.rowcount == 1
 
+    def reinstate_device(self, device_id: str, name: str | None = None) -> str:
+        """Rotate credentials while explicitly restoring a revoked terminal."""
+        device_id = str(uuid.UUID(device_id))
+        credential = secrets.token_urlsafe(40)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT name,revoked_at FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            if row is None or row["revoked_at"] is None:
+                db.rollback()
+                raise ValueError("Only a revoked, registered device can be reinstated.")
+            db.execute("UPDATE devices SET name=?,credential_hash=?,registered_at=?,revoked_at=NULL WHERE device_id=?",
+                       ((name or row["name"])[:120], self._encrypt_credential(credential),
+                        utc_now(), device_id))
+            db.commit()
+        return credential
+
     def device_secret(self, device_id: str):
         with self.connect() as db:
             row = db.execute("SELECT credential_hash,revoked_at FROM devices WHERE device_id=?", (device_id,)).fetchone()
-            return row if row and not row["revoked_at"] else None
+            if row is None or row["revoked_at"]:
+                return None
+            stored = row["credential_hash"]
+            if stored.startswith("enc:"):
+                blob = base64.urlsafe_b64decode(stored[4:].encode("ascii"))
+                credential = self._cipher.decrypt(blob[:12], blob[12:], b"solona-lan-device-v1")
+                hmac_key = hashlib.sha256(credential).digest()
+            else:
+                # Existing coordinators retain compatibility until devices are
+                # explicitly re-enrolled; migrate these rows during rotation.
+                hmac_key = bytes.fromhex(stored)
+            return {"hmac_key": hmac_key, "revoked_at": row["revoked_at"]}
 
     def verify_device_request(self, device_id: str, path: str, body: bytes,
                               timestamp: int, signature: str, now: Optional[int] = None) -> bool:
@@ -213,15 +277,27 @@ class ShopCoordinator:
         now = now if now is not None else int(datetime.now(timezone.utc).timestamp())
         if abs(now - timestamp) > 300:
             return False
-        expected = hmac.new(bytes.fromhex(row["credential_hash"]),
+        expected = hmac.new(row["hmac_key"],
                             str(timestamp).encode() + b"." + path.encode() + b"." + body,
                             hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature, expected)
+
+    def device_can_request(self, device_id: str, timestamp: int,
+                           now: Optional[int] = None) -> bool:
+        if self.device_secret(device_id) is None:
+            return False
+        now = now if now is not None else int(datetime.now(timezone.utc).timestamp())
+        return abs(now - timestamp) <= 300
 
 
 def make_handler(coordinator: ShopCoordinator, enrollment_secret: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "SolonaShopCoordinator/1"
+        request_timeout = 5
+
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(self.request_timeout)
 
         def log_message(self, format, *args):
             # Avoid logging request bodies, credentials, or patient data.
@@ -249,22 +325,48 @@ def make_handler(coordinator: ShopCoordinator, enrollment_secret: str):
             return self._json(404, {"detail": "Not found"})
 
         def do_POST(self):
-            length = min(int(self.headers.get("Content-Length", "0")), 1_000_000)
-            body = self.rfile.read(length)
+            raw_length = self.headers.get("Content-Length")
+            try:
+                length = int(raw_length) if raw_length is not None else -1
+            except ValueError:
+                return self._json(400, {"detail": "Invalid Content-Length"})
+            if length < 0:
+                return self._json(400, {"detail": "Invalid Content-Length"})
+            if length > 1_000_000:
+                return self._json(413, {"detail": "Request body is too large"})
             if self.path == "/enroll":
                 supplied = self.headers.get("X-Shani-Enrollment", "")
                 if not hmac.compare_digest(supplied, enrollment_secret):
                     return self._json(401, {"detail": "Authentication failed"})
                 try:
+                    body = self.rfile.read(length)
                     data = json.loads(body)
                     device_id = str(uuid.UUID(data["device_id"]))
                     credential = coordinator.enroll_device(device_id, data.get("name", "Terminal"))
                     return self._json(201, {"device_id": device_id, "device_credential": credential})
+                except PermissionError:
+                    return self._json(403, {"detail": "A revoked device requires administrator reinstatement"})
                 except (ValueError, KeyError, TypeError, json.JSONDecodeError):
                     return self._json(422, {"detail": "Invalid enrollment"})
+            if self.path.startswith("/devices/") and self.path.endswith("/reinstate"):
+                supplied = self.headers.get("X-Shani-Enrollment", "")
+                if not hmac.compare_digest(supplied, enrollment_secret):
+                    return self._json(401, {"detail": "Authentication failed"})
+                try:
+                    device_id = str(uuid.UUID(self.path.split("/")[2]))
+                    data = json.loads(self.rfile.read(length) or b"{}")
+                    credential = coordinator.reinstate_device(device_id, data.get("name"))
+                    return self._json(200, {"device_id": device_id, "device_credential": credential})
+                except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                    return self._json(422, {"detail": "Invalid reinstatement"})
             if self.path != "/events":
                 return self._json(404, {"detail": "Not found"})
             try:
+                device_id = self.headers.get("X-Shani-Device", "")
+                timestamp = int(self.headers.get("X-Shani-Time", "0"))
+                if not coordinator.device_can_request(device_id, timestamp):
+                    return self._json(401, {"detail": "Authentication failed"})
+                body = self.rfile.read(length)
                 if not self._authenticated(body):
                     return self._json(401, {"detail": "Authentication failed"})
                 event = json.loads(body)
@@ -272,7 +374,7 @@ def make_handler(coordinator: ShopCoordinator, enrollment_secret: str):
                     return self._json(401, {"detail": "Authentication failed"})
                 result = coordinator.process_event(event)
                 return self._json(200 if result["status"] == "accepted" else 409, result)
-            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError, TimeoutError):
                 return self._json(422, {"detail": "Invalid event"})
 
         def do_DELETE(self):
@@ -307,7 +409,7 @@ def main():
         "SOLONA_LAN_DB", os.environ.get("SPMS_LAN_DB", "data/shop-coordinator.db")))
     parser.add_argument("--seed-from", help="Import opening batches from a local pharmacy.db before serving")
     parser.add_argument("--host", default=os.environ.get(
-        "SOLONA_LAN_HOST", os.environ.get("SPMS_LAN_HOST", "0.0.0.0")))
+        "SOLONA_LAN_HOST", os.environ.get("SPMS_LAN_HOST", "127.0.0.1")))
     parser.add_argument("--port", type=int, default=int(os.environ.get(
         "SOLONA_LAN_PORT", os.environ.get("SPMS_LAN_PORT", "8765"))))
     args = parser.parse_args()

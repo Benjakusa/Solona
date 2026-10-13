@@ -35,7 +35,7 @@ def _latest_subscription(db: Session, tenant_id: UUID):
 
 
 @billing_router.get("/tenants/{tenant_id}/billing")
-def billing_summary(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def billing_summary(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "billing:read")
     set_tenant_context(db, tenant_id)
     subscription = _latest_subscription(db, tenant_id)
@@ -65,7 +65,7 @@ def billing_summary(tenant_id: UUID, principal: Principal = Depends(current_prin
 @billing_router.post("/tenants/{tenant_id}/billing/stk-push", status_code=202)
 @limiter.limit("5/minute")
 def start_subscription_payment(request: Request, tenant_id: UUID, payload: StkPushRequest,
-                               principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+                               principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "billing:manage")
     set_tenant_context(db, tenant_id)
     try:
@@ -123,7 +123,7 @@ def start_subscription_payment(request: Request, tenant_id: UUID, payload: StkPu
 
 @billing_router.post("/payments/daraja/callback")
 @limiter.limit("120/minute")
-def daraja_callback(request: Request, payload: dict, db: Session = Depends(get_db)):
+def daraja_callback(request: Request, payload: dict, db: Session = Depends(get_db, scope="function")):
     try:
         return daraja.process_callback(db, payload)
     except ValueError:
@@ -133,7 +133,7 @@ def daraja_callback(request: Request, payload: dict, db: Session = Depends(get_d
 @billing_router.post("/tenants/{tenant_id}/billing/payments/{payment_id}/reconcile")
 @limiter.limit("10/minute")
 def reconcile_subscription_payment(request: Request, tenant_id: UUID, payment_id: UUID,
-                                    principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+                                    principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "billing:manage")
     set_tenant_context(db, tenant_id)
     payment = db.scalar(select(SubscriptionPayment).where(
@@ -160,7 +160,7 @@ def reconcile_subscription_payment(request: Request, tenant_id: UUID, payment_id
 @billing_router.post("/tenants/{tenant_id}/support-incidents", status_code=201)
 @limiter.limit("5/hour")
 def create_support_incident(request: Request, tenant_id: UUID, payload: SupportIncidentCreate,
-                            principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+                            principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "tenant:read")
     incident = SupportIncident(tenant_id=tenant_id, created_by=principal.user.id,
                                subject=payload.subject.strip(), description=payload.description.strip())
@@ -172,7 +172,7 @@ def create_support_incident(request: Request, tenant_id: UUID, payload: SupportI
 
 
 @billing_router.get("/tenants/{tenant_id}/support-incidents")
-def list_support_incidents(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def list_support_incidents(tenant_id: UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "tenant:read")
     rows = db.scalars(select(SupportIncident).where(SupportIncident.tenant_id == tenant_id)
                       .order_by(SupportIncident.created_at.desc()).limit(100)).all()
@@ -182,7 +182,7 @@ def list_support_incidents(tenant_id: UUID, principal: Principal = Depends(curre
 
 @billing_router.get("/tenants/{tenant_id}/export")
 def export_tenant_data(tenant_id: UUID, principal: Principal = Depends(current_principal),
-                       db: Session = Depends(get_db)):
+                       db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "tenant:manage")
     if not membership.all_shops:
         raise ApiError(403, "tenant_wide_export_required", "Tenant-wide data export requires access to all shops.")
@@ -220,7 +220,7 @@ def export_tenant_data(tenant_id: UUID, principal: Principal = Depends(current_p
 
 
 @platform_router.get("/tenants")
-def platform_tenants(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+def platform_tenants(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     rows = db.execute(select(Tenant, TenantSubscription, SubscriptionPlan)
                       .outerjoin(TenantSubscription, TenantSubscription.tenant_id == Tenant.id)
                       .outerjoin(SubscriptionPlan, SubscriptionPlan.id == TenantSubscription.plan_id)
@@ -233,7 +233,7 @@ def platform_tenants(_: Principal = Depends(require_platform_operator), db: Sess
 
 @platform_router.patch("/tenants/{tenant_id}/subscription")
 def platform_set_subscription(tenant_id: UUID, payload: PlatformSubscriptionPatch,
-                              principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+                              principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise ApiError(404, "tenant_not_found", "Tenant not found.")
@@ -270,7 +270,7 @@ def platform_set_subscription(tenant_id: UUID, payload: PlatformSubscriptionPatc
 
 
 @platform_router.get("/billing/payments")
-def platform_billing_payments(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+def platform_billing_payments(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     rows = db.execute(select(SubscriptionPayment, DarajaAttempt)
                       .outerjoin(DarajaAttempt, DarajaAttempt.subscription_payment_id == SubscriptionPayment.id)
                       .order_by(SubscriptionPayment.created_at.desc()).limit(500)).all()
@@ -282,7 +282,7 @@ def platform_billing_payments(_: Principal = Depends(require_platform_operator),
 
 
 @platform_router.get("/subscription-plans")
-def platform_plans(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+def platform_plans(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     rows = db.scalars(select(SubscriptionPlan).order_by(SubscriptionPlan.code)).all()
     return [{"id": str(plan.id), "code": plan.code, "name": plan.name,
              "max_shops": plan.max_shops, "max_devices_per_shop": plan.max_devices_per_shop,
@@ -292,7 +292,7 @@ def platform_plans(_: Principal = Depends(require_platform_operator), db: Sessio
 
 @platform_router.post("/subscription-plans", status_code=201)
 def create_plan(payload: SubscriptionPlanCreate, principal: Principal = Depends(require_platform_operator),
-                db: Session = Depends(get_db)):
+                db: Session = Depends(get_db, scope="function")):
     if db.scalar(select(SubscriptionPlan.id).where(SubscriptionPlan.code == payload.code)):
         raise ApiError(409, "plan_code_exists", "A subscription plan already uses this code.")
     plan = SubscriptionPlan(**payload.model_dump())
@@ -306,7 +306,7 @@ def create_plan(payload: SubscriptionPlanCreate, principal: Principal = Depends(
 
 @platform_router.patch("/subscription-plans/{plan_id}")
 def update_plan(plan_id: UUID, payload: SubscriptionPlanPatch,
-                principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+                principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     plan = db.get(SubscriptionPlan, plan_id)
     if plan is None:
         raise ApiError(404, "plan_not_found", "Subscription plan not found.")
@@ -322,7 +322,7 @@ def update_plan(plan_id: UUID, payload: SubscriptionPlanPatch,
 
 @platform_router.post("/users/{user_id}/revoke-sessions")
 def platform_revoke_sessions(user_id: UUID, principal: Principal = Depends(require_platform_operator),
-                             db: Session = Depends(get_db)):
+                             db: Session = Depends(get_db, scope="function")):
     if db.get(User, user_id) is None:
         raise ApiError(404, "user_not_found", "User not found.")
     now = datetime.now(timezone.utc)
@@ -337,7 +337,7 @@ def platform_revoke_sessions(user_id: UUID, principal: Principal = Depends(requi
 
 
 @platform_router.get("/support-incidents")
-def platform_incidents(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+def platform_incidents(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     rows = db.scalars(select(SupportIncident).order_by(SupportIncident.created_at.desc()).limit(500)).all()
     return [{"id": str(row.id), "tenant_id": str(row.tenant_id), "subject": row.subject,
              "status": row.status, "created_at": row.created_at} for row in rows]
@@ -345,7 +345,7 @@ def platform_incidents(_: Principal = Depends(require_platform_operator), db: Se
 
 @platform_router.patch("/support-incidents/{incident_id}")
 def platform_update_incident(incident_id: UUID, status: str,
-                             principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+                             principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     if status not in {"open", "investigating", "waiting_on_tenant", "resolved", "closed"}:
         raise ApiError(422, "invalid_incident_status", "The requested support incident status is invalid.")
     incident = db.get(SupportIncident, incident_id)
@@ -360,7 +360,7 @@ def platform_update_incident(incident_id: UUID, status: str,
 
 @platform_router.get("/devices")
 def platform_devices(tenant_id: UUID | None = None,
-                     _: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+                     _: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     query = select(Device, Shop.name).join(Shop, Shop.id == Device.shop_id)
     if tenant_id is not None:
         query = query.where(Device.tenant_id == tenant_id)
@@ -373,7 +373,7 @@ def platform_devices(tenant_id: UUID | None = None,
 
 @platform_router.delete("/devices/{device_id}")
 def platform_revoke_device(device_id: UUID, principal: Principal = Depends(require_platform_operator),
-                           db: Session = Depends(get_db)):
+                           db: Session = Depends(get_db, scope="function")):
     device = db.get(Device, device_id)
     if device is None:
         raise ApiError(404, "device_not_found", "Device not found.")
@@ -389,7 +389,7 @@ def platform_revoke_device(device_id: UUID, principal: Principal = Depends(requi
 
 
 @platform_router.get("/synchronization/health")
-def platform_sync_health(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+def platform_sync_health(_: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     rows = db.execute(select(SyncEvent.status, func.count(SyncEvent.id))
                       .group_by(SyncEvent.status).order_by(SyncEvent.status)).all()
     return {"event_counts_by_status": {status: count for status, count in rows},
@@ -398,7 +398,7 @@ def platform_sync_health(_: Principal = Depends(require_platform_operator), db: 
 
 @platform_router.get("/audit")
 def platform_audit(limit: int = 100, _: Principal = Depends(require_platform_operator),
-                   db: Session = Depends(get_db)):
+                   db: Session = Depends(get_db, scope="function")):
     rows = db.scalars(select(PlatformAuditEvent).order_by(PlatformAuditEvent.created_at.desc())
                       .limit(min(max(limit, 1), 500))).all()
     return [{"id": str(row.id), "actor_id": str(row.actor_id),
@@ -410,7 +410,7 @@ def platform_audit(limit: int = 100, _: Principal = Depends(require_platform_ope
 
 @platform_router.post("/tenants/{tenant_id}/support-access-grants", status_code=201)
 def grant_support_access(tenant_id: UUID, payload: SupportAccessRequest,
-                         principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+                         principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     if db.get(Tenant, tenant_id) is None:
         raise ApiError(404, "tenant_not_found", "Tenant not found.")
     # This grant permits metadata audit inspection only; no business records are
@@ -436,7 +436,7 @@ def grant_support_access(tenant_id: UUID, payload: SupportAccessRequest,
 
 @platform_router.get("/tenants/{tenant_id}/audit")
 def platform_tenant_audit(tenant_id: UUID, limit: int = 100,
-                          principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db)):
+                          principal: Principal = Depends(require_platform_operator), db: Session = Depends(get_db, scope="function")):
     grant = db.scalar(select(SupportAccessGrant).where(
         SupportAccessGrant.tenant_id == tenant_id,
         SupportAccessGrant.operator_id == principal.user.id,
@@ -462,7 +462,7 @@ def platform_tenant_audit(tenant_id: UUID, limit: int = 100,
 
 @platform_router.delete("/support-access-grants/{grant_id}")
 def revoke_support_grant(grant_id: UUID, principal: Principal = Depends(require_platform_operator),
-                         db: Session = Depends(get_db)):
+                         db: Session = Depends(get_db, scope="function")):
     grant = db.get(SupportAccessGrant, grant_id)
     if grant is None:
         raise ApiError(404, "support_grant_not_found", "Support access grant not found.")

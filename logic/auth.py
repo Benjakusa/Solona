@@ -125,8 +125,8 @@ def create_user(username: str, password: str, full_name: str, role: str) -> User
     username = username.strip()
     if not username:
         raise ValueError("Username is required.")
-    if not password or len(password) < 4:
-        raise ValueError("Password must be at least 4 characters.")
+    if not password or len(password.strip()) < 12:
+        raise ValueError("Password must be at least 12 characters.")
     if role not in VALID_ROLES:
         raise ValueError(f"Role must be one of {VALID_ROLES}.")
 
@@ -163,9 +163,17 @@ def update_user(
 
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        target = conn.execute("SELECT role,is_active FROM users WHERE id=?", (user_id,)).fetchone()
+        if target and target["role"] == "admin" and target["is_active"] and (role != "admin" or not is_active):
+            active_admins = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role='admin' AND is_active=1 AND id!=?", (user_id,)
+            ).fetchone()[0]
+            if active_admins == 0:
+                raise ValueError("Cannot demote or deactivate the last active administrator.")
         if new_password:
-            if len(new_password) < 4:
-                raise ValueError("Password must be at least 4 characters.")
+            if len(new_password.strip()) < 12:
+                raise ValueError("Password must be at least 12 characters.")
             conn.execute(
                 "UPDATE users SET full_name=?, role=?, is_active=?, password_hash=? "
                 "WHERE id=?",
@@ -187,13 +195,15 @@ def delete_user(user_id: int, current_user_id: int) -> None:
 
     conn = get_connection()
     try:
-        remaining_admins = conn.execute(
-            "SELECT COUNT(*) AS c FROM users WHERE role='admin' AND id != ?",
-            (user_id,),
-        ).fetchone()["c"]
-        target = conn.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
-        if target and target["role"] == "admin" and remaining_admins == 0:
-            raise ValueError("Cannot delete the last remaining admin account.")
+        conn.execute("BEGIN IMMEDIATE")
+        target = conn.execute("SELECT role,is_active FROM users WHERE id=?", (user_id,)).fetchone()
+        if target and target["role"] == "admin" and target["is_active"]:
+            remaining_admins = conn.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1 AND id != ?",
+                (user_id,),
+            ).fetchone()["c"]
+            if remaining_admins == 0:
+                raise ValueError("Cannot delete the last active administrator account.")
 
         # sales.cashier_id, customer_payments.recorded_by and
         # sale_returns.processed_by all reference users(id) with no ON
@@ -245,36 +255,47 @@ def verify_recovery_pin(pin: str) -> bool:
     return bool(owner_hash and verify_password(pin, owner_hash))
 
 
-def recover_admin_access(new_password: str) -> str:
+def recover_admin_access(recovery_pin: str, new_password: str) -> str:
     """Set a caller-chosen password for the oldest admin after PIN verification.
 
-    The caller must verify the configured recovery PIN before invoking this
-    function. No default credential is generated or returned to the screen.
+    The configured recovery PIN is checked here as well as in the UI. No
+    caller can bypass recovery authorization by invoking the logic directly.
     """
     new_password = new_password.strip()
     if len(new_password) < 12:
         raise ValueError("Recovery password must be at least 12 characters.")
+    if not verify_recovery_pin(recovery_pin):
+        raise ValueError("The configured Recovery PIN is not correct.")
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT id, username FROM users WHERE role='admin' ORDER BY id LIMIT 1"
         ).fetchone()
         if row is None:
-            # No admin account exists at all (shouldn't normally happen) --
-            # recreate the default one from scratch.
+            existing = conn.execute("SELECT id FROM users WHERE username=? COLLATE NOCASE", (DEFAULT_ADMIN_USERNAME,)).fetchone()
+            if existing:
+                user_id = existing["id"]
+                conn.execute("UPDATE users SET role='admin',is_active=1,password_hash=? WHERE id=?",
+                             (hash_password(new_password), user_id))
+            else:
+                cur = conn.execute(
+                    "INSERT INTO users (username, password_hash, full_name, role, is_active) "
+                    "VALUES (?, ?, ?, 'admin', 1)",
+                    (DEFAULT_ADMIN_USERNAME, hash_password(new_password), "Administrator"),
+                )
+                user_id = cur.lastrowid
+            username = DEFAULT_ADMIN_USERNAME
+        else:
+            user_id = row["id"]
+            username = row["username"]
             conn.execute(
-                "INSERT INTO users (username, password_hash, full_name, role, is_active) "
-                "VALUES (?, ?, ?, 'admin', 1)",
-                (DEFAULT_ADMIN_USERNAME, hash_password(new_password), "Administrator"),
+                "UPDATE users SET password_hash=?, is_active=1, role='admin' WHERE id=?",
+                (hash_password(new_password), user_id),
             )
-            conn.commit()
-            return DEFAULT_ADMIN_USERNAME
-
-        conn.execute(
-            "UPDATE users SET password_hash=?, is_active=1, role='admin' WHERE id=?",
-            (hash_password(new_password), row["id"]),
-        )
+        conn.execute("INSERT INTO audit_log(user_id,username,action,details) VALUES(?,?,?,?)",
+                     (user_id, username, "admin_password_reset", "Administrator password reset using owner Recovery PIN."))
         conn.commit()
-        return row["username"]
+        return username
     finally:
         conn.close()

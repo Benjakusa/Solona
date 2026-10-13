@@ -63,6 +63,9 @@ class MedicineEditDialog(QDialog):
 
         self.quantity_input = QSpinBox()
         self.quantity_input.setRange(0, 1_000_000)
+        self.quantity_input.setReadOnly(self.medicine is not None)
+        if self.medicine is not None:
+            self.quantity_input.setToolTip("Use a receipt or stock adjustment to change inventory quantity.")
 
         self.units_per_pack_input = QSpinBox()
         self.units_per_pack_input.setRange(1, 10_000)

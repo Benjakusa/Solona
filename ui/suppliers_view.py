@@ -7,6 +7,7 @@ from ui.icons import icon
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -111,6 +112,13 @@ class PurchaseOrderDialog(QDialog):
         self.unit_cost_input.setToolTip("Leave as-is to keep the medicine's current purchase price.")
         self.unit_cost_input.valueChanged.connect(self._recalculate_total)
 
+        self.update_sale_price_input = QCheckBox("Update the medicine selling price")
+        self.new_sale_price_input = QDoubleSpinBox()
+        self.new_sale_price_input.setRange(0, 1_000_000)
+        self.new_sale_price_input.setDecimals(2)
+        self.new_sale_price_input.setEnabled(False)
+        self.update_sale_price_input.toggled.connect(self.new_sale_price_input.setEnabled)
+
         self.total_cost_label = QLabel("Total cost: 0.00")
         self.total_cost_label.setProperty("heading", True)
 
@@ -126,6 +134,8 @@ class PurchaseOrderDialog(QDialog):
         layout.addRow("New batch no.", self.batch_input)
         layout.addRow("New expiry date", self.expiry_input)
         layout.addRow("Unit cost", self.unit_cost_input)
+        layout.addRow(self.update_sale_price_input)
+        layout.addRow("New selling price", self.new_sale_price_input)
         layout.addRow(self.total_cost_label)
         layout.addRow("Amount Paid Now", self.amount_paid_input)
 
@@ -159,6 +169,7 @@ class PurchaseOrderDialog(QDialog):
         self.unit_cost_input.blockSignals(True)
         self.unit_cost_input.setValue(med.purchase_price)
         self.unit_cost_input.blockSignals(False)
+        self.new_sale_price_input.setValue(med.sale_price)
         self._recalculate_total()
 
     def _recalculate_total(self):
@@ -181,6 +192,8 @@ class PurchaseOrderDialog(QDialog):
                 new_batch_no=self.batch_input.text(),
                 new_expiry_date=self.expiry_input.date().toString("yyyy-MM-dd"),
                 new_purchase_price=self.unit_cost_input.value() if med else None,
+                new_sale_price=(self.new_sale_price_input.value()
+                                if self.update_sale_price_input.isChecked() else None),
                 amount_paid=self.amount_paid_input.value(),
                 recorded_by=self.parent().current_user.id,
             )

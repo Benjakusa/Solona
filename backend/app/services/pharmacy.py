@@ -16,6 +16,7 @@ from app.schemas import (
     SupplierCreate,
 )
 from app.services.audit import record_audit
+from app.services.refunds import refund_cents
 
 CENT = Decimal("0.01")
 
@@ -212,6 +213,8 @@ def record_replayed_sale(db: Session, tenant_id: UUID, shop_id: UUID, actor_id: 
         ).with_for_update())
         if batch is None:
             raise ApiError(409, "offline_batch_unavailable", "An offline batch cannot be reconciled.")
+        if unit_price != batch.selling_price:
+            raise ApiError(409, "offline_price_conflict", "The offline unit price does not match the authorized cloud price.")
         if batch.quantity < quantity:
             raise ApiError(409, "offline_stock_conflict", "Shop stock changed while this terminal was offline.")
         parsed.append((batch, medicine_id, quantity, unit_price, unit_cost, sale_item_id, line_subtotal))
@@ -241,8 +244,15 @@ def record_replayed_sale(db: Session, tenant_id: UUID, shop_id: UUID, actor_id: 
             payment_id = UUID(payload["payment_id"])
         except (ValueError, KeyError, TypeError):
             raise ApiError(422, "offline_sale_invalid", "The offline payment identifier is invalid.") from None
+    try:
+        sold_at = datetime.fromisoformat(str(payload.get("occurred_at", "")).replace("Z", "+00:00"))
+        if sold_at.tzinfo is None:
+            raise ValueError("timezone required")
+    except ValueError:
+        raise ApiError(422, "offline_sale_invalid", "The offline sale timestamp is invalid.") from None
     sale = Sale(id=transaction_id, tenant_id=tenant_id, shop_id=shop_id, transaction_id=transaction_id,
                 cashier_id=actor_id, customer_id=customer_id, invoice_no=invoice_no,
+                sold_at=sold_at,
                 currency="KES", total_amount=total, amount_paid=amount_paid,
                 discount_amount=discount, tax_amount=tax,
                 status="paid" if amount_paid == total else "partially_paid")
@@ -308,7 +318,18 @@ def record_replayed_return(db: Session, tenant_id: UUID, shop_id: UUID, actor_id
         raise ApiError(409, "offline_return_item_mismatch", "The returned sale line or batch does not match the original sale.")
     if item.returned_qty + quantity > item.quantity:
         raise ApiError(409, "offline_return_quantity_conflict", "The return exceeds the unreturned quantity on the original sale line.")
-    expected_refund = money(item.unit_price * quantity)
+    sale_items = db.scalars(select(SaleItem).where(
+        SaleItem.tenant_id == tenant_id, SaleItem.shop_id == shop_id,
+        SaleItem.sale_id == sale.id,
+    ).order_by(SaleItem.id)).all()
+    line_snapshots = [
+        {"id": sale_item.id, "quantity": sale_item.quantity, "subtotal": sale_item.subtotal}
+        for sale_item in sale_items
+    ]
+    expected_refund = money(Decimal(refund_cents(
+        line_snapshots, sale.discount_amount, sale.tax_amount,
+        item.id, quantity, item.returned_qty,
+    )) / 100)
     if reported_refund != expected_refund:
         raise ApiError(409, "offline_return_amount_conflict", "The refund does not match the original sale price.")
 

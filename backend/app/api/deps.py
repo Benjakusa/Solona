@@ -23,7 +23,7 @@ class Principal:
 
 def current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> Principal:
     if credentials is None:
         raise ApiError(401, "authentication_required", "Authentication is required.")
@@ -42,7 +42,7 @@ def current_principal(
     return Principal(user=user, session_id=session_id)
 
 
-def require_platform_operator(principal: Principal = Depends(current_principal), db: Session = Depends(get_db)) -> Principal:
+def require_platform_operator(principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")) -> Principal:
     operator = db.get(PlatformOperator, principal.user.id)
     if operator is None or not operator.is_active:
         raise ApiError(403, "platform_operator_required", "Platform operator access is required.")
@@ -52,7 +52,7 @@ def require_platform_operator(principal: Principal = Depends(current_principal),
 
 def optional_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> Principal | None:
     if credentials is None:
         return None

@@ -1,6 +1,7 @@
 """Authenticated idempotent device event inbox for offline clients."""
 import hmac
 from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header
@@ -41,7 +42,7 @@ def _authorized_device(db: Session, tenant_id: UUID, shop_id: UUID,
 @router.post("/events")
 def push_events(tenant_id: UUID, shop_id: UUID, payload: SyncPushIn,
                 x_device_id: UUID = Header(), x_device_secret: str = Header(min_length=40, max_length=200),
-                db: Session = Depends(get_db)):
+                db: Session = Depends(get_db, scope="function")):
     device = _authorized_device(db, tenant_id, shop_id, x_device_id, x_device_secret)
     acknowledgments = []
     for event in payload.events:
@@ -186,6 +187,39 @@ def _apply_medicine_update(db: Session, tenant_id: UUID, actor_id: UUID, transac
         ).with_for_update()).all()
         for batch in batches:
             batch.selling_price = data["sale_price"]
+    applied_movements = []
+    for movement in data.get("movements", []):
+        try:
+            batch_id = UUID(str(movement.get("cloud_batch_id") or movement["batch_id"]))
+            raw_delta = movement.get("quantity_delta", movement.get("delta"))
+            if isinstance(raw_delta, bool):
+                raise ValueError("boolean stock delta")
+            delta = int(raw_delta)
+        except (ValueError, KeyError, TypeError):
+            raise ApiError(422, "offline_stock_adjustment_invalid", "The stock movement is invalid.") from None
+        if delta == 0:
+            raise ApiError(422, "offline_stock_adjustment_invalid", "The stock movement is invalid.")
+        batch = db.scalar(select(MedicineBatch).where(
+            MedicineBatch.tenant_id == tenant_id,
+            MedicineBatch.shop_id == UUID(data["shop_id"]),
+            MedicineBatch.id == batch_id,
+            MedicineBatch.medicine_id == medicine_id,
+        ).with_for_update())
+        if batch is None:
+            raise ApiError(409, "offline_batch_unavailable", "The stock movement batch is unavailable.")
+        if batch.quantity + delta < 0:
+            raise ApiError(409, "offline_stock_conflict", "The stock movement exceeds current cloud stock.")
+        batch.quantity += delta
+        db.add(StockMovement(tenant_id=tenant_id, shop_id=batch.shop_id, batch_id=batch.id,
+                             transaction_id=transaction_id, movement_type="offline_adjustment",
+                             quantity_delta=delta, actor_id=actor_id))
+        applied_movements.append({"batch_id": str(batch.id), "delta": delta})
+    if applied_movements:
+        from app.services.audit import record_audit
+        record_audit(db, tenant_id=tenant_id, actor_id=actor_id,
+                     action="inventory.stock_adjusted_offline", resource_type="medicine",
+                     resource_id=medicine.id, shop_id=UUID(data["shop_id"]),
+                     transaction_id=transaction_id, details={"movements": applied_movements})
     return medicine
 
 
@@ -211,8 +245,14 @@ def _apply_purchase(db: Session, tenant_id: UUID, shop_id: UUID, actor_id: UUID,
     ).with_for_update())
     expiry = date.fromisoformat(data["expiry_date"])
     quantity = int(data["quantity"])
-    cost = data["purchase_cost"]
-    price = data.get("selling_price") or (batch.selling_price if batch else 0)
+    if quantity <= 0:
+        raise ApiError(422, "offline_purchase_invalid", "A purchase quantity must be positive.")
+    cost = pharmacy_service.money(Decimal(str(data["purchase_cost"])))
+    price = pharmacy_service.money(Decimal(str(
+        data["selling_price"] if "selling_price" in data else (batch.selling_price if batch else 0)
+    )))
+    if cost < 0 or price < 0:
+        raise ApiError(422, "offline_purchase_invalid", "Purchase prices cannot be negative.")
     if batch:
         if batch.expiry_date != expiry:
             raise ApiError(409, "offline_batch_expiry_conflict", "The batch expiry differs from the cloud record.")
@@ -226,8 +266,10 @@ def _apply_purchase(db: Session, tenant_id: UUID, shop_id: UUID, actor_id: UUID,
                               selling_price=price, supplier_id=supplier_id)
         db.add(batch)
         db.flush()
-    total = cost * quantity
-    paid = data.get("amount_paid", total)
+    total = pharmacy_service.money(cost * quantity)
+    paid = pharmacy_service.money(Decimal(str(data.get("amount_paid", total))))
+    if paid < 0 or paid > total:
+        raise ApiError(422, "offline_purchase_invalid", "The purchase payment amount is invalid.")
     purchase.total_amount = total
     purchase.amount_paid = paid
     purchase.status = "paid" if paid == total else "partially_paid"
@@ -241,6 +283,12 @@ def _apply_purchase(db: Session, tenant_id: UUID, shop_id: UUID, actor_id: UUID,
     if paid > 0:
         db.add(Payment(tenant_id=tenant_id, shop_id=shop_id, purchase_id=purchase.id,
                        transaction_id=transaction_id, amount=paid, currency="KES", method="cash"))
+    from app.services.audit import record_audit
+    record_audit(db, tenant_id=tenant_id, actor_id=actor_id,
+                 action="purchase.received_offline", resource_type="purchase",
+                 resource_id=purchase.id, shop_id=shop_id, transaction_id=transaction_id,
+                 details={"batch_id": str(batch.id), "quantity": quantity,
+                          "total": str(total), "amount_paid": str(paid)})
     return purchase
 
 
@@ -276,7 +324,7 @@ def _apply_stock_adjustment(db: Session, tenant_id: UUID, shop_id: UUID, actor_i
 @router.get("/changes")
 def pull_changes(tenant_id: UUID, shop_id: UUID, cursor: int = 0, limit: int = 100,
                  x_device_id: UUID = Header(), x_device_secret: str = Header(min_length=40, max_length=200),
-                 db: Session = Depends(get_db)):
+                 db: Session = Depends(get_db, scope="function")):
     device = _authorized_device(db, tenant_id, shop_id, x_device_id, x_device_secret)
     rows = db.scalars(select(SyncEvent).where(
         SyncEvent.tenant_id == tenant_id, SyncEvent.shop_id == shop_id,
@@ -299,7 +347,7 @@ def pull_changes(tenant_id: UUID, shop_id: UUID, cursor: int = 0, limit: int = 1
 @router.get("/bootstrap")
 def bootstrap(tenant_id: UUID, shop_id: UUID,
               x_device_id: UUID = Header(), x_device_secret: str = Header(min_length=40, max_length=200),
-              db: Session = Depends(get_db)):
+              db: Session = Depends(get_db, scope="function")):
     """Initial authorized catalogue snapshot for an enrolled terminal."""
     _authorized_device(db, tenant_id, shop_id, x_device_id, x_device_secret)
     medicines = db.scalars(select(Medicine).where(Medicine.tenant_id == tenant_id, Medicine.is_active.is_(True))).all()

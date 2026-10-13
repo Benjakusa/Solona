@@ -9,6 +9,7 @@ from datetime import datetime
 
 from database.db_manager import get_connection
 from logic import inventory
+from logic.refunds import refund_for_return
 from logic.sync import enqueue_event, utc_now
 
 VALID_PAYMENT_METHODS = ("cash", "card", "easypaisa", "jazzcash", "bank", "udhaar")
@@ -45,24 +46,26 @@ class Cart:
     def add(self, medicine: inventory.Medicine, quantity: int):
         if quantity <= 0:
             raise ValueError("Quantity must be positive.")
+        available_stock = inventory.sellable_quantity(medicine.id)
         for item in self.items:
             if item.medicine_id == medicine.id:
                 new_qty = item.quantity + quantity
-                if new_qty > medicine.quantity:
+                if new_qty > available_stock:
                     raise ValueError(
-                        f"Only {medicine.quantity} unit(s) of '{medicine.name}' in stock."
+                        f"Only {available_stock} sellable unit(s) of '{medicine.name}' are available."
                     )
                 item.quantity = new_qty
+                item.available_stock = available_stock
                 return
-        if quantity > medicine.quantity:
-            raise ValueError(f"Only {medicine.quantity} unit(s) of '{medicine.name}' in stock.")
+        if quantity > available_stock:
+            raise ValueError(f"Only {available_stock} sellable unit(s) of '{medicine.name}' are available.")
         self.items.append(
             CartItem(
                 medicine_id=medicine.id,
                 name=medicine.name,
                 unit_price=medicine.sale_price,
                 quantity=quantity,
-                available_stock=medicine.quantity,
+                available_stock=available_stock,
             )
         )
 
@@ -101,12 +104,30 @@ class Cart:
 def _generate_invoice_no(conn) -> str:
     today = datetime.now().strftime("%Y%m%d")
     identity = conn.execute("SELECT device_id FROM sync_identity WHERE singleton=1").fetchone()
-    terminal = identity["device_id"].replace("-", "")[:6].upper() if identity else "LOCAL"
+    device_id = identity["device_id"] if identity else "LOCAL"
+    terminal = device_id.replace("-", "")[:6].upper()
     prefix = f"INV-{today}-{terminal}-"
-    row = conn.execute(
-        "SELECT COUNT(*) AS c FROM sales WHERE invoice_no LIKE ?", (f"{prefix}%",)
-    ).fetchone()
-    seq = row["c"] + 1
+    existing = conn.execute("SELECT invoice_no FROM sales WHERE invoice_no LIKE ?", (f"{prefix}%",)).fetchall()
+    max_existing = 0
+    for row in existing:
+        try:
+            max_existing = max(max_existing, int(row["invoice_no"].rsplit("-", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    conn.execute(
+        "INSERT INTO invoice_counters(device_id,business_date,last_value) VALUES(?,?,?) "
+        "ON CONFLICT(device_id,business_date) DO NOTHING",
+        (device_id, today, max_existing),
+    )
+    conn.execute(
+        "UPDATE invoice_counters SET last_value=MAX(last_value,?)+1 "
+        "WHERE device_id=? AND business_date=?",
+        (max_existing, device_id, today),
+    )
+    seq = conn.execute(
+        "SELECT last_value FROM invoice_counters WHERE device_id=? AND business_date=?",
+        (device_id, today),
+    ).fetchone()[0]
     return f"{prefix}{seq:04d}"
 
 
@@ -202,8 +223,9 @@ def checkout(
             ).fetchone()["cloud_uuid"]
             lots = conn.execute(
                 "SELECT * FROM medicine_batches WHERE medicine_id=? AND quantity>0 "
-                "AND (expiry_date IS NULL OR expiry_date='' OR expiry_date>=date('now','localtime')) "
-                "ORDER BY CASE WHEN expiry_date IS NULL OR expiry_date='' THEN 1 ELSE 0 END,expiry_date,created_at,id",
+                "AND expiry_date IS NOT NULL AND expiry_date!='' "
+                "AND expiry_date>=date('now','localtime') "
+                "ORDER BY expiry_date,created_at,id",
                 (item.medicine_id,),
             ).fetchall()
             lot_total = sum(lot["quantity"] for lot in lots)
@@ -360,7 +382,15 @@ def process_return(sale_item_id: int, quantity: int, reason: str, processed_by: 
             raise ValueError(f"Only {remaining} unit(s) can still be returned from this line.")
 
         sale = conn.execute("SELECT * FROM sales WHERE id=?", (item["sale_id"],)).fetchone()
-        refund_amount = round(item["unit_price"] * quantity, 2)
+        sale_lines = [dict(row) for row in conn.execute(
+            "SELECT id,quantity,subtotal FROM sale_items WHERE sale_id=? ORDER BY id",
+            (item["sale_id"],),
+        ).fetchall()]
+        refund_cents = refund_for_return(
+            sale_lines, sale["discount"], sale["tax"], sale_item_id,
+            quantity, item["returned_qty"],
+        )
+        refund_amount = refund_cents / 100
 
         conn.execute(
             "UPDATE sale_items SET returned_qty = returned_qty + ? WHERE id=?", (quantity, sale_item_id)

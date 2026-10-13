@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import traceback
 import uuid
 
 from fastapi import FastAPI, Request
@@ -20,7 +21,11 @@ from sqlalchemy.exc import IntegrityError
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        return json.dumps({"level": record.levelname.lower(), "logger": record.name, "message": record.getMessage()})
+        result = {"level": record.levelname.lower(), "logger": record.name,
+                  "message": record.getMessage()}
+        if record.exc_info:
+            result["traceback"] = "".join(traceback.format_exception(*record.exc_info))
+        return json.dumps(result)
 
 
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
@@ -65,9 +70,10 @@ async def rate_limit_handler(_: Request, __: RateLimitExceeded):
 
 
 @app.exception_handler(Exception)
-async def unexpected_error_handler(request: Request, _: Exception):
+async def unexpected_error_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.error(json.dumps({"event": "request_failed", "request_id": request_id, "path": request.url.path}))
+    logger.error(json.dumps({"event": "request_failed", "request_id": request_id,
+                             "path": request.url.path}), exc_info=(type(exc), exc, exc.__traceback__))
     return JSONResponse(status_code=500, content={"error": {"code": "internal_error", "message": "The request could not be completed."}})
 
 

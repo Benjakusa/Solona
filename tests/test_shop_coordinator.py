@@ -6,7 +6,7 @@ import hmac
 from uuid import uuid4
 
 from database import db_manager
-from network.shop_server import ShopCoordinator
+from network.shop_server import ShopCoordinator, make_handler
 
 
 def seed_database(path):
@@ -74,3 +74,47 @@ def test_revoked_device_cannot_be_reenrolled_implicitly(tmp_path):
     assert not coordinator.verify_device_request(device_id, "/batches", b"", 1_800_000_000,
                                                 "unused", now=1_800_000_000)
     assert not coordinator.revoke_device(device_id)
+
+
+def test_wp7_revoked_device_cannot_reenroll_with_shared_secret(tmp_path):
+    import pytest
+
+    coordinator = ShopCoordinator(tmp_path / "coordinator.db")
+    device_id = str(uuid4())
+    coordinator.enroll_device(device_id, "Test terminal")
+    assert coordinator.revoke_device(device_id)
+
+    with pytest.raises(PermissionError):
+        coordinator.enroll_device(device_id, "Test terminal")
+
+
+def test_wp7_invalid_content_length_is_rejected_without_reading_body(tmp_path):
+    import socket
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    coordinator = ShopCoordinator(tmp_path / "coordinator.db")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(coordinator, "test-enrollment-secret"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with socket.create_connection(server.server_address, timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(b"POST /events HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
+            response = client.recv(4096)
+        assert b"400 Bad Request" in response
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_wp7_database_does_not_store_device_hmac_key_in_plaintext(tmp_path):
+    coordinator = ShopCoordinator(tmp_path / "coordinator.db")
+    device_id = str(uuid4())
+    credential = coordinator.enroll_device(device_id, "Encrypted key terminal")
+    with coordinator.connect() as db:
+        stored = db.execute("SELECT credential_hash FROM devices WHERE device_id=?", (device_id,)).fetchone()[0]
+
+    assert stored.startswith("enc:")
+    assert stored != hashlib.sha256(credential.encode()).hexdigest()

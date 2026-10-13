@@ -22,9 +22,11 @@ def verify_password(password: str, stored_hash: str) -> bool:
     """Check a plaintext password against a stored 'salt$hash' string."""
     try:
         salt_hex, digest_hex = stored_hash.split("$", 1)
-    except ValueError:
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
+        if len(salt) != _SALT_BYTES or len(expected) != 32:
+            return False
+    except (AttributeError, TypeError, ValueError):
         return False
-    salt = bytes.fromhex(salt_hex)
-    expected = bytes.fromhex(digest_hex)
     actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _ITERATIONS)
     return hmac.compare_digest(expected, actual)

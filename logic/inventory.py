@@ -126,6 +126,20 @@ def get_medicine(medicine_id: int) -> Optional[Medicine]:
         conn.close()
 
 
+def sellable_quantity(medicine_id: int) -> int:
+    """Count only stock in dated batches that have not expired."""
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT COALESCE(SUM(quantity),0) FROM medicine_batches "
+            "WHERE medicine_id=? AND quantity>0 AND expiry_date IS NOT NULL "
+            "AND expiry_date!='' AND expiry_date>=date('now','localtime')",
+            (medicine_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
 def get_medicine_by_barcode(barcode: str) -> Optional[Medicine]:
     """Exact-match lookup for a scanned barcode (used by the Billing screen)."""
     barcode = barcode.strip()
@@ -200,6 +214,8 @@ def add_medicine(
     actor_id: Optional[int] = None,
 ) -> Medicine:
     _validate(name, quantity, purchase_price, sale_price, expiry_date)
+    if quantity > 0 and (not expiry_date or expiry_date < date.today().isoformat()):
+        raise ValueError("Opening stock requires a valid, non-expired batch expiry date.")
     units_per_pack = max(1, units_per_pack)
 
     conn = get_connection()
@@ -282,6 +298,8 @@ def update_medicine(
         if old is None:
             raise ValueError("Medicine not found.")
         delta = quantity - old["quantity"]
+        if delta:
+            raise ValueError("Use the stock adjustment or receipt flow to change stock quantity.")
         transaction_id = str(uuid.uuid4())
         movements = []
         if delta > 0:
@@ -356,6 +374,12 @@ def delete_medicine(medicine_id: int, actor_id: Optional[int] = None) -> None:
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        stock = conn.execute(
+            "SELECT COALESCE(SUM(quantity),0) FROM medicine_batches WHERE medicine_id=?",
+            (medicine_id,),
+        ).fetchone()[0]
+        if stock > 0:
+            raise ValueError("This medicine still has stock. Record a write-off adjustment before deactivating it.")
         transaction_id = str(uuid.uuid4())
         conn.execute("UPDATE medicines SET is_active = 0 WHERE id = ?", (medicine_id,))
         enqueue_event(conn, "medicine.deactivated", str(medicine_id),
@@ -368,13 +392,29 @@ def delete_medicine(medicine_id: int, actor_id: Optional[int] = None) -> None:
         conn.close()
 
 
-def adjust_stock(medicine_id: int, delta: int, actor_id: Optional[int] = None) -> None:
-    """Increase (positive delta) or decrease (negative delta) stock quantity.
-    Used by purchase orders (+) and sales (-). Raises if it would go negative."""
+def adjust_stock(medicine_id: int, delta: int, actor_id: Optional[int] = None,
+                 batch_no: str | None = None, expiry_date: str | None = None,
+                 unit_cost: float | None = None, reason: str | None = None) -> None:
+    """Adjust stock with a traceable batch, cost, expiry, actor, and reason."""
+    if delta == 0:
+        raise ValueError("Stock adjustment must change quantity.")
+    if delta > 0:
+        if not batch_no or not batch_no.strip() or not expiry_date or unit_cost is None:
+            raise ValueError("Positive stock adjustments require batch number, expiry date, unit cost, and reason.")
+        try:
+            datetime.strptime(expiry_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("Expiry date must be in YYYY-MM-DD format.") from None
+        if expiry_date < date.today().isoformat():
+            raise ValueError("Cannot add stock from an expired batch.")
+        if unit_cost < 0:
+            raise ValueError("Unit cost cannot be negative.")
+    if actor_id is None or not reason or not reason.strip() or len(reason.strip()) > 300:
+        raise ValueError("A responsible user and a reason of 1 to 300 characters are required.")
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT quantity FROM medicines WHERE id=?", (medicine_id,)).fetchone()
+        row = conn.execute("SELECT quantity,sale_price FROM medicines WHERE id=?", (medicine_id,)).fetchone()
         if row is None:
             raise ValueError("Medicine not found.")
         new_qty = row["quantity"] + delta
@@ -385,11 +425,10 @@ def adjust_stock(medicine_id: int, delta: int, actor_id: Optional[int] = None) -
         movements = []
         if delta > 0:
             batch_id = str(uuid.uuid4())
-            batch_no = f"ADJUSTMENT-{transaction_id[:8]}"
-            conn.execute(
-                "INSERT INTO medicine_batches(id,medicine_id,cloud_uuid,batch_no,quantity,source) VALUES(?,?,?,?,?,'adjustment')",
-                (batch_id, medicine_id, batch_id, batch_no, delta),
-            )
+            conn.execute("INSERT INTO medicine_batches(id,medicine_id,cloud_uuid,batch_no,expiry_date,quantity,purchase_price,sale_price,source) "
+                         "VALUES(?,?,?,?,?,?,?,?, 'adjustment')",
+                         (batch_id, medicine_id, batch_id, batch_no.strip(), expiry_date,
+                          delta, unit_cost, row["sale_price"]))
             movements.append({"batch_id": batch_id, "cloud_batch_id": batch_id, "quantity_delta": delta})
         elif delta < 0:
             lots = conn.execute(
@@ -411,7 +450,7 @@ def adjust_stock(medicine_id: int, delta: int, actor_id: Optional[int] = None) -
                 "INSERT INTO stock_movements(id,transaction_id,medicine_id,batch_id,movement_type,quantity_delta,occurred_at,details) "
                 "VALUES(?,?,?,?,?,?,?,?)",
                 (str(uuid.uuid4()), transaction_id, medicine_id, movement["batch_id"], "adjustment",
-                 movement["quantity_delta"], utc_now(), json.dumps({"reason": "manual adjustment"})),
+                 movement["quantity_delta"], utc_now(), json.dumps({"reason": reason.strip()})),
             )
         conn.execute(
             "UPDATE medicines SET quantity=?, updated_at=datetime('now','localtime') WHERE id=?",
@@ -438,10 +477,19 @@ def expiring_medicines(within_days: int = 30) -> list[Medicine]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            _SELECT_BASE + " AND m.expiry_date IS NOT NULL AND m.expiry_date != '' "
-            "AND m.expiry_date <= ? ORDER BY m.expiry_date",
+            "SELECT m.*,s.name AS supplier_name,MIN(b.expiry_date) AS alert_expiry "
+            "FROM medicine_batches b JOIN medicines m ON m.id=b.medicine_id "
+            "LEFT JOIN suppliers s ON s.id=m.supplier_id "
+            "WHERE m.is_active=1 AND b.quantity>0 "
+            "AND b.expiry_date IS NOT NULL AND b.expiry_date!='' AND b.expiry_date<=? "
+            "GROUP BY m.id ORDER BY alert_expiry,m.name",
             (cutoff,),
         ).fetchall()
-        return [_row_to_medicine(r) for r in rows]
+        result = []
+        for row in rows:
+            medicine_data = dict(row)
+            medicine_data["expiry_date"] = medicine_data["alert_expiry"]
+            result.append(_row_to_medicine(medicine_data))
+        return result
     finally:
         conn.close()

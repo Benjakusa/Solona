@@ -210,6 +210,18 @@ def record_purchase_order(
                 "updated_at=datetime('now','localtime') WHERE id=?",
                 (new_qty, batch_no, new_expiry_date, medicine_id),
             )
+        if new_sale_price is not None:
+            if new_sale_price < 0:
+                raise ValueError("Selling price cannot be negative.")
+            conn.execute("UPDATE medicines SET sale_price=? WHERE id=?", (new_sale_price, medicine_id))
+            user = conn.execute("SELECT username FROM users WHERE id=?", (recorded_by,)).fetchone() if recorded_by else None
+            conn.execute(
+                "INSERT INTO audit_log(user_id,username,action,details) VALUES(?,?,?,?)",
+                (recorded_by, user["username"] if user else "(system)",
+                 "medicine.sale_price_updated", json.dumps({"medicine_id": medicine_id,
+                 "previous_price": row["sale_price"], "new_price": new_sale_price,
+                 "purchase_batch": batch_no})),
+            )
 
         transaction_id = str(uuid.uuid4())
         occurred_at = utc_now()
@@ -257,6 +269,7 @@ def record_purchase_order(
                        "supplier_id": row["supplier_id"], "batch_id": batch_id,
                        "batch_no": batch_no, "expiry_date": new_expiry_date, "quantity": quantity,
                        "purchase_cost": unit_cost, "selling_price": selling_price, "total_cost": total_cost,
+                       "update_selling_price": new_sale_price is not None,
                        "amount_paid": amount_paid, "payable_added": max(payable_added, 0.0),
                        "actor_id": recorded_by}, transaction_id=transaction_id)
 
