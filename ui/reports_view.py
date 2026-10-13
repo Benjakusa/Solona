@@ -3,6 +3,8 @@ each viewable on-screen with Export to PDF / Export to Excel buttons."""
 from datetime import date
 
 from PySide6.QtCore import QDate, Qt
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDateEdit,
@@ -56,9 +58,11 @@ class _ReportTab(QWidget):
         self.layout_.addWidget(self.table)
 
         export_row = QHBoxLayout()
-        pdf_btn = QPushButton("📄  Export to PDF")
+        pdf_btn = QPushButton("Export to PDF")
+        pdf_btn.setIcon(icon(pdf_btn, "file"))
         pdf_btn.clicked.connect(lambda: self._export("pdf"))
-        excel_btn = QPushButton("📊  Export to Excel")
+        excel_btn = QPushButton("Export to Excel")
+        excel_btn.setIcon(icon(excel_btn, "info"))
         excel_btn.clicked.connect(lambda: self._export("excel"))
         export_row.addWidget(pdf_btn)
         export_row.addWidget(excel_btn)
@@ -106,7 +110,8 @@ class DailySalesTab(_ReportTab):
         self.date_input.setDate(QDate.currentDate())
         self.controls_layout.addWidget(QLabel("Date:"))
         self.controls_layout.addWidget(self.date_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -143,7 +148,8 @@ class MonthlySalesTab(_ReportTab):
         self.controls_layout.addWidget(self.year_input)
         self.controls_layout.addWidget(QLabel("Month:"))
         self.controls_layout.addWidget(self.month_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -179,7 +185,8 @@ class ProfitLossTab(_ReportTab):
         self.controls_layout.addWidget(self.start_input)
         self.controls_layout.addWidget(QLabel("To:"))
         self.controls_layout.addWidget(self.end_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -209,7 +216,8 @@ class ExpiryStockTab(_ReportTab):
         self.days_input.setValue(90)
         self.controls_layout.addWidget(QLabel("Within (days):"))
         self.controls_layout.addWidget(self.days_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -235,7 +243,8 @@ class DeadStockTab(_ReportTab):
         self.days_input.setValue(90)
         self.controls_layout.addWidget(QLabel("No sales in (days):"))
         self.controls_layout.addWidget(self.days_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -268,7 +277,8 @@ class BestSellersTab(_ReportTab):
         self.controls_layout.addWidget(self.start_input)
         self.controls_layout.addWidget(QLabel("To:"))
         self.controls_layout.addWidget(self.end_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -302,7 +312,8 @@ class ControlledSubstancesTab(_ReportTab):
         self.controls_layout.addWidget(self.start_input)
         self.controls_layout.addWidget(QLabel("To:"))
         self.controls_layout.addWidget(self.end_input)
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -328,7 +339,8 @@ class ControlledSubstancesTab(_ReportTab):
 class CustomerCreditTab(_ReportTab):
     def __init__(self):
         super().__init__()
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()
@@ -348,7 +360,8 @@ class SupplierPayableTab(_ReportTab):
 
     def __init__(self):
         super().__init__()
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         self.controls_layout.addWidget(refresh_btn)
         self.controls_layout.addStretch()

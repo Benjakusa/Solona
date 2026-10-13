@@ -1,17 +1,21 @@
-"""Shared stylesheet for a clean, light, medical-themed UI (blues/whites/greens)."""
+"""Shared sky-blue and green stylesheet for the application."""
 
-PRIMARY = "#1565C0"      # blue
-PRIMARY_DARK = "#0D47A1"
-ACCENT = "#2E7D32"       # green
-BACKGROUND = "#F5F7FA"
-DANGER = "#C62828"
+PRIMARY = "#38BDF8"      # sky blue
+PRIMARY_DARK = "#0284C7"
+ACCENT = "#22C55E"       # green
+BACKGROUND = "#E0F2FE"
+DANGER = "#16A34A"       # errors use the allowed green palette
+TEXT = "#14532D"
+SURFACE = "#FFFFFF"
+SKY_PALE = "#BAE6FD"
+GREEN_DARK = "#15803D"
 
 APP_STYLESHEET = f"""
 QWidget {{
     background-color: {BACKGROUND};
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 14px;
-    color: #1A1A1A;
+    color: {TEXT};
 }}
 
 QMainWindow, QDialog {{
@@ -20,14 +24,14 @@ QMainWindow, QDialog {{
 
 QPushButton {{
     background-color: {PRIMARY};
-    color: white;
+    color: {TEXT};
     border: none;
     border-radius: 6px;
     padding: 10px 18px;
     font-weight: 600;
 }}
 QPushButton:hover {{ background-color: {PRIMARY_DARK}; }}
-QPushButton:disabled {{ background-color: #B0BEC5; color: #ECECEC; }}
+QPushButton:disabled {{ background-color: {SKY_PALE}; color: {GREEN_DARK}; }}
 
 QPushButton[flat="true"] {{
     background-color: transparent;
@@ -37,17 +41,17 @@ QPushButton[flat="true"] {{
     border-radius: 0px;
     font-weight: 500;
 }}
-QPushButton[flat="true"]:hover {{ background-color: #E3ECF7; }}
+QPushButton[flat="true"]:hover {{ background-color: {SKY_PALE}; }}
 QPushButton[flat="true"][active="true"] {{
     background-color: {PRIMARY};
-    color: white;
+    color: {TEXT};
 }}
 
 QPushButton[danger="true"] {{ background-color: {DANGER}; }}
-QPushButton[danger="true"]:hover {{ background-color: #8E0000; }}
+QPushButton[danger="true"]:hover {{ background-color: {GREEN_DARK}; }}
 
 QPushButton[success="true"] {{ background-color: {ACCENT}; }}
-QPushButton[success="true"]:hover {{ background-color: #1B5E20; }}
+QPushButton[success="true"]:hover {{ background-color: {GREEN_DARK}; }}
 
 QPushButton[compact="true"] {{
     padding: 5px 10px;
@@ -57,23 +61,23 @@ QPushButton[compact="true"] {{
 }}
 
 QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox, QTextEdit {{
-    background-color: white;
-    border: 1px solid #C7D0DA;
+    background-color: {SURFACE};
+    border: 1px solid {PRIMARY};
     border-radius: 4px;
     padding: 6px 8px;
 }}
-QLineEdit:focus, QComboBox:focus {{ border: 1px solid {PRIMARY}; }}
+QLineEdit:focus, QComboBox:focus {{ border: 2px solid {PRIMARY_DARK}; }}
 
 QTableWidget {{
-    background-color: white;
-    gridline-color: #E0E4E8;
-    border: 1px solid #DDE3E9;
-    selection-background-color: #BBDEFB;
-    selection-color: #0D1B2A;
+    background-color: {SURFACE};
+    gridline-color: {SKY_PALE};
+    border: 1px solid {PRIMARY};
+    selection-background-color: {SKY_PALE};
+    selection-color: {TEXT};
 }}
 QHeaderView::section {{
     background-color: {PRIMARY};
-    color: white;
+    color: {TEXT};
     padding: 6px;
     border: none;
     font-weight: 600;
@@ -86,7 +90,7 @@ QLabel[heading="true"] {{
 }}
 QLabel[subheading="true"] {{
     font-size: 13px;
-    color: #546E7A;
+    color: {GREEN_DARK};
 }}
 QLabel[warning="true"] {{
     color: {DANGER};
@@ -94,17 +98,17 @@ QLabel[warning="true"] {{
 }}
 
 #Sidebar {{
-    background-color: white;
-    border-right: 1px solid #DDE3E9;
+    background-color: {TEXT};
+    border-right: 1px solid {PRIMARY};
 }}
 
 #DashboardCard {{
-    background-color: white;
+    background-color: {SURFACE};
     border-radius: 8px;
-    border: 1px solid #DDE3E9;
+    border: 1px solid {PRIMARY};
 }}
 
-QTabWidget::pane {{ border: 1px solid #DDE3E9; background: white; }}
+QTabWidget::pane {{ border: 1px solid {PRIMARY}; background: {SURFACE}; }}
 QTabBar::tab {{ padding: 8px 16px; }}
-QTabBar::tab:selected {{ background: {PRIMARY}; color: white; }}
+QTabBar::tab:selected {{ background: {PRIMARY}; color: {TEXT}; }}
 """

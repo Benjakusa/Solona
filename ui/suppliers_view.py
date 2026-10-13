@@ -3,6 +3,8 @@ orders (receive new stock into an existing medicine's batch/expiry/quantity),
 and track/pay down accounts payable (the mirror of customer udhaar)."""
 from PySide6.QtGui import QColor
 from PySide6.QtCore import QDate
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -26,7 +28,7 @@ from PySide6.QtWidgets import (
 from logic import auth, inventory, suppliers
 from logic.sales import PAYMENT_METHOD_LABELS
 
-PAYABLE_COLOR = QColor("#FFF3CD")
+PAYABLE_COLOR = QColor("#BAE6FD")
 
 
 class SupplierEditDialog(QDialog):
@@ -49,10 +51,12 @@ class SupplierEditDialog(QDialog):
         layout.addRow("Address", self.address_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("💾  Save")
+        save_btn = QPushButton("Save")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -126,10 +130,12 @@ class PurchaseOrderDialog(QDialog):
         layout.addRow("Amount Paid Now", self.amount_paid_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("📥  Receive Stock")
+        save_btn = QPushButton("Receive Stock")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -249,10 +255,12 @@ class RecordSupplierPaymentDialog(QDialog):
         layout.addRow("Note (optional)", self.note_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("💾  Record Payment")
+        save_btn = QPushButton("Record Payment")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -287,10 +295,12 @@ class SuppliersView(QWidget):
         title.setProperty("heading", True)
         header.addWidget(title)
         header.addStretch()
-        po_btn = QPushButton("📦  Purchase Order")
+        po_btn = QPushButton("Purchase Order")
+        po_btn.setIcon(icon(po_btn, "file"))
         po_btn.clicked.connect(self._record_purchase_order)
         header.addWidget(po_btn)
-        add_btn = QPushButton("➕  Add Supplier")
+        add_btn = QPushButton("Add Supplier")
+        add_btn.setIcon(icon(add_btn, "add"))
         add_btn.setProperty("success", True)
         add_btn.clicked.connect(self._add_supplier)
         header.addWidget(add_btn)
@@ -333,20 +343,24 @@ class SuppliersView(QWidget):
             actions_layout = QHBoxLayout()
             actions_layout.setContentsMargins(4, 2, 4, 2)
             actions_layout.setSpacing(6)
-            history_btn = QPushButton("📜  History")
+            history_btn = QPushButton("History")
+            history_btn.setIcon(icon(history_btn, "history"))
             history_btn.setProperty("compact", True)
             history_btn.clicked.connect(lambda _, sup=s: self._show_history(sup))
             actions_layout.addWidget(history_btn)
             if s.has_payable:
-                pay_btn = QPushButton("💰  Record Payment")
+                pay_btn = QPushButton("Record Payment")
+                pay_btn.setIcon(icon(pay_btn, "accept"))
                 pay_btn.setProperty("compact", True)
                 pay_btn.setProperty("success", True)
                 pay_btn.clicked.connect(lambda _, sup=s: self._record_payment(sup))
                 actions_layout.addWidget(pay_btn)
-            edit_btn = QPushButton("✏️  Edit")
+            edit_btn = QPushButton("Edit")
+            edit_btn.setIcon(icon(edit_btn, "edit"))
             edit_btn.setProperty("compact", True)
             edit_btn.clicked.connect(lambda _, sup=s: self._edit_supplier(sup))
-            delete_btn = QPushButton("🗑️  Delete")
+            delete_btn = QPushButton("Delete")
+            delete_btn.setIcon(icon(delete_btn, "delete"))
             delete_btn.setProperty("compact", True)
             delete_btn.setProperty("danger", True)
             delete_btn.clicked.connect(lambda _, sup=s: self._delete_supplier(sup))
@@ -395,6 +409,6 @@ class SuppliersView(QWidget):
             info = dialog.result_info
             msg = f"Purchase order recorded and stock updated.\n\nTotal cost: {info['total_cost']:.2f}"
             if info["payable_added"] > 0.005:
-                msg += f"\n📒 Added to supplier's payable: {info['payable_added']:.2f}"
+                msg += f"\nAdded to supplier's payable: {info['payable_added']:.2f}"
             QMessageBox.information(self, "Stock received", msg)
             self.refresh()

@@ -1,6 +1,8 @@
 """Returns / Refunds screen: find a past sale, return specific line items
 (full or partial quantity), restocking inventory and reducing the
 customer's udhaar balance first if that sale wasn't fully paid."""
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -44,10 +46,12 @@ class ProcessReturnDialog(QDialog):
         layout.addRow("Reason", self.reason_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("↩️  Process Return")
+        save_btn = QPushButton("Process Return")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -92,7 +96,7 @@ class ReturnsView(QWidget):
         layout.addWidget(title)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  Search by invoice number...")
+        self.search_input.setPlaceholderText("Search by invoice number...")
         self.search_input.textChanged.connect(self.refresh_search)
         layout.addWidget(self.search_input)
 
@@ -155,7 +159,8 @@ class ReturnsView(QWidget):
 
             remaining = item["quantity"] - item["returned_qty"]
             if remaining > 0:
-                return_btn = QPushButton("↩️  Return")
+                return_btn = QPushButton("Return")
+                return_btn.setIcon(icon(return_btn, "history"))
                 return_btn.setProperty("compact", True)
                 return_btn.setProperty("danger", True)
                 return_btn.clicked.connect(lambda _, it=item, rem=remaining: self._process_return(it, rem))

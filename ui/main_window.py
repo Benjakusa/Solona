@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import QTimer
+from ui.icons import icon
 
 from logic import auth, backup
 from ui.backup_view import BackupView
@@ -97,22 +98,22 @@ class MainWindow(QMainWindow):
             pages.append(("Settings", SettingsView(self.user)))
 
         nav_icons = {
-            "Dashboard": "🏠",
-            "Billing": "🧾",
-            "Returns": "↩️",
-            "Inventory": "💊",
-            "Customers": "👥",
-            "Suppliers": "🚚",
-            "Reports": "📊",
-            "Backup / Restore": "🗄️",
-            "Settings": "⚙️",
+            "Dashboard": "home",
+            "Billing": "cart",
+            "Returns": "history",
+            "Inventory": "file",
+            "Customers": "users",
+            "Suppliers": "folder",
+            "Reports": "info",
+            "Backup / Restore": "save",
+            "Settings": "settings",
         }
 
         for name, widget in pages:
             self.stack.addWidget(widget)
             self.pages_by_name[name] = widget
-            icon = nav_icons.get(name, "")
-            btn = QPushButton(f"{icon}  {name}" if icon else name)
+            btn = QPushButton(name)
+            btn.setIcon(icon(btn, nav_icons[name]))
             btn.setProperty("flat", True)
             btn.setCheckable(True)
             btn.clicked.connect(lambda _, w=widget, b=None: self._switch_page(w))
@@ -121,7 +122,8 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch()
 
-        logout_btn = QPushButton("🚪  Logout")
+        logout_btn = QPushButton("Logout")
+        logout_btn.setIcon(icon(logout_btn, "logout"))
         logout_btn.setProperty("danger", True)
         logout_btn.clicked.connect(self._logout)
         sidebar_layout.addWidget(logout_btn)

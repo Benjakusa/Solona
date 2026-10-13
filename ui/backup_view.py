@@ -6,6 +6,8 @@
 import sys
 
 from PySide6.QtCore import Qt
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -49,16 +51,22 @@ class BackupView(QWidget):
 
         actions = QHBoxLayout()
 
-        backup_now_btn = QPushButton("💾  Backup Now")
+        backup_now_btn = QPushButton("Backup Now")
+
+        backup_now_btn.setIcon(icon(backup_now_btn, "save"))
         backup_now_btn.setProperty("success", True)
         backup_now_btn.clicked.connect(lambda: self._do_backup(custom_location=False))
         actions.addWidget(backup_now_btn)
 
-        backup_to_btn = QPushButton("📁  Backup to Custom Location...")
+        backup_to_btn = QPushButton("Backup to Custom Location...")
+
+        backup_to_btn.setIcon(icon(backup_to_btn, "folder"))
         backup_to_btn.clicked.connect(lambda: self._do_backup(custom_location=True))
         actions.addWidget(backup_to_btn)
 
-        restore_btn = QPushButton("♻️  Restore Backup...")
+        restore_btn = QPushButton("Restore Backup...")
+
+        restore_btn.setIcon(icon(restore_btn, "history"))
         restore_btn.setProperty("danger", True)
         restore_btn.clicked.connect(self._do_restore)
         actions.addWidget(restore_btn)
@@ -96,7 +104,9 @@ class BackupView(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(rec.size_human))
             self.table.setItem(row, 3, QTableWidgetItem(rec.filename))
 
-            delete_btn = QPushButton("🗑️  Delete")
+            delete_btn = QPushButton("Delete")
+
+            delete_btn.setIcon(icon(delete_btn, "delete"))
             delete_btn.setProperty("compact", True)
             delete_btn.setProperty("danger", True)
             delete_btn.clicked.connect(lambda _, r=rec: self._delete_backup(r))
@@ -127,7 +137,7 @@ class BackupView(QWidget):
         QMessageBox.information(
             self,
             "Backup Successful",
-            f"Backup Successful ✅\n\nSaved to:\n{record.filename}\nSize: {record.size_human}",
+            f"Backup Successful \n\nSaved to:\n{record.filename}\nSize: {record.size_human}",
         )
         self.refresh()
 
@@ -184,7 +194,7 @@ class BackupView(QWidget):
         QMessageBox.information(
             self,
             "Restore Successful",
-            "Restore Successful ✅\n\nThe application will now restart to load the restored data.",
+            "Restore Successful \n\nThe application will now restart to load the restored data.",
         )
         self._restart_app()
 

@@ -7,6 +7,8 @@ import os
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QColor
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -30,8 +32,8 @@ from PySide6.QtWidgets import (
 
 from logic import audit, auth, barcode_utils, inventory, settings, suppliers
 
-LOW_STOCK_COLOR = QColor("#FFF3CD")
-EXPIRING_COLOR = QColor("#F8D7DA")
+LOW_STOCK_COLOR = QColor("#BAE6FD")
+EXPIRING_COLOR = QColor("#BBF7D0")
 
 
 class MedicineEditDialog(QDialog):
@@ -120,11 +122,13 @@ class MedicineEditDialog(QDialog):
 
         barcode_row = QHBoxLayout()
         barcode_row.addWidget(self.barcode_input)
-        generate_btn = QPushButton("🏷️  Generate")
+        generate_btn = QPushButton("Generate")
+        generate_btn.setIcon(icon(generate_btn, "add"))
         generate_btn.setProperty("compact", True)
         generate_btn.clicked.connect(self._generate_barcode)
         barcode_row.addWidget(generate_btn)
-        print_label_btn = QPushButton("🖨️  Print Label")
+        print_label_btn = QPushButton("Print Label")
+        print_label_btn.setIcon(icon(print_label_btn, "print"))
         print_label_btn.setProperty("compact", True)
         print_label_btn.clicked.connect(self._print_label)
         barcode_row.addWidget(print_label_btn)
@@ -140,10 +144,12 @@ class MedicineEditDialog(QDialog):
         layout.addRow("Supplier", self.supplier_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("💾  Save")
+        save_btn = QPushButton("Save")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -239,7 +245,8 @@ class InventoryView(QWidget):
         header.addWidget(title)
         header.addStretch()
         if self.current_user.is_admin:
-            add_btn = QPushButton("➕  Add Medicine")
+            add_btn = QPushButton("Add Medicine")
+            add_btn.setIcon(icon(add_btn, "add"))
             add_btn.setProperty("success", True)
             add_btn.clicked.connect(self._add_medicine)
             header.addWidget(add_btn)
@@ -247,7 +254,7 @@ class InventoryView(QWidget):
 
         filters = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  Search by name or generic name...")
+        self.search_input.setPlaceholderText("Search by name or generic name...")
         self.search_input.textChanged.connect(self.refresh)
         filters.addWidget(self.search_input)
 
@@ -334,7 +341,7 @@ class InventoryView(QWidget):
 
         self.table.setRowCount(len(medicines))
         for row, m in enumerate(medicines):
-            display_name = f"🔒 {m.name}" if m.is_controlled_substance else m.name
+            display_name = f"{m.name}" if m.is_controlled_substance else m.name
             qty_display = f"{m.quantity} (×{m.units_per_pack})" if m.units_per_pack > 1 else str(m.quantity)
             values = [
                 display_name, m.generic_name, m.manufacturer, m.category, m.barcode, m.batch_no,
@@ -361,10 +368,12 @@ class InventoryView(QWidget):
                 actions_layout = QHBoxLayout()
                 actions_layout.setContentsMargins(4, 2, 4, 2)
                 actions_layout.setSpacing(6)
-                edit_btn = QPushButton("✏️  Edit")
+                edit_btn = QPushButton("Edit")
+                edit_btn.setIcon(icon(edit_btn, "edit"))
                 edit_btn.setProperty("compact", True)
                 edit_btn.clicked.connect(lambda _, med=m: self._edit_medicine(med))
-                delete_btn = QPushButton("🗑️  Delete")
+                delete_btn = QPushButton("Delete")
+                delete_btn.setIcon(icon(delete_btn, "delete"))
                 delete_btn.setProperty("compact", True)
                 delete_btn.setProperty("danger", True)
                 delete_btn.clicked.connect(lambda _, med=m: self._delete_medicine(med))

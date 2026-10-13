@@ -1,6 +1,8 @@
 """Customer management screen: add/edit/delete, udhaar (credit) balance and
 payment recording, and viewing a customer's sales history."""
 from PySide6.QtGui import QColor
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -22,7 +24,7 @@ from PySide6.QtWidgets import (
 from logic import customers
 from logic.sales import PAYMENT_METHOD_LABELS
 
-CREDIT_COLOR = QColor("#FFF3CD")
+CREDIT_COLOR = QColor("#BAE6FD")
 
 
 class CustomerEditDialog(QDialog):
@@ -42,10 +44,12 @@ class CustomerEditDialog(QDialog):
         layout.addRow("Phone", self.phone_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("💾  Save")
+        save_btn = QPushButton("Save")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -153,10 +157,12 @@ class RecordPaymentDialog(QDialog):
         layout.addRow("Note (optional)", self.note_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("💾  Record Payment")
+        save_btn = QPushButton("Record Payment")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -194,14 +200,15 @@ class CustomersView(QWidget):
         title.setProperty("heading", True)
         header.addWidget(title)
         header.addStretch()
-        add_btn = QPushButton("➕  Add Customer")
+        add_btn = QPushButton("Add Customer")
+        add_btn.setIcon(icon(add_btn, "add"))
         add_btn.setProperty("success", True)
         add_btn.clicked.connect(self._add_customer)
         header.addWidget(add_btn)
         layout.addLayout(header)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  Search by name or phone...")
+        self.search_input.setPlaceholderText("Search by name or phone...")
         self.search_input.textChanged.connect(self.refresh)
         layout.addWidget(self.search_input)
 
@@ -240,13 +247,15 @@ class CustomersView(QWidget):
             actions_layout = QHBoxLayout()
             actions_layout.setContentsMargins(4, 2, 4, 2)
             actions_layout.setSpacing(6)
-            history_btn = QPushButton("📜  History")
+            history_btn = QPushButton("History")
+            history_btn.setIcon(icon(history_btn, "history"))
             history_btn.setProperty("compact", True)
             history_btn.clicked.connect(lambda _, cust=c: self._show_history(cust))
             actions_layout.addWidget(history_btn)
 
             if c.has_credit and self.current_user is not None:
-                pay_btn = QPushButton("💰  Record Payment")
+                pay_btn = QPushButton("Record Payment")
+                pay_btn.setIcon(icon(pay_btn, "accept"))
                 pay_btn.setProperty("compact", True)
                 pay_btn.setProperty("success", True)
                 pay_btn.clicked.connect(lambda _, cust=c: self._record_payment(cust))
@@ -254,10 +263,12 @@ class CustomersView(QWidget):
 
             is_admin = self.current_user is None or self.current_user.is_admin
             if is_admin:
-                edit_btn = QPushButton("✏️  Edit")
+                edit_btn = QPushButton("Edit")
+                edit_btn.setIcon(icon(edit_btn, "edit"))
                 edit_btn.setProperty("compact", True)
                 edit_btn.clicked.connect(lambda _, cust=c: self._edit_customer(cust))
-                delete_btn = QPushButton("🗑️  Delete")
+                delete_btn = QPushButton("Delete")
+                delete_btn.setIcon(icon(delete_btn, "delete"))
                 delete_btn.setProperty("compact", True)
                 delete_btn.setProperty("danger", True)
                 delete_btn.clicked.connect(lambda _, cust=c: self._delete_customer(cust))

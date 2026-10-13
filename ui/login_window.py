@@ -1,6 +1,8 @@
 """Login screen. On success, opens the MainWindow with the authenticated user."""
 import os
 from PySide6.QtCore import Qt
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
@@ -59,12 +61,16 @@ class LoginWindow(QWidget):
         self.error_label.setWordWrap(True)
         layout.addWidget(self.error_label)
 
-        login_btn = QPushButton("🔐  Login")
+        login_btn = QPushButton("Login")
+
+        login_btn.setIcon(icon(login_btn, "accept"))
         login_btn.setProperty("success", True)
         login_btn.clicked.connect(self._attempt_login)
         layout.addWidget(login_btn)
 
-        online_btn = QPushButton("🌐  Sign in online / refresh offline access")
+        online_btn = QPushButton("Sign in online / refresh offline access")
+
+        online_btn.setIcon(icon(online_btn, "info"))
         online_btn.setProperty("flat", True)
         online_btn.clicked.connect(self._attempt_online_login)
         layout.addWidget(online_btn)

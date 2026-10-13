@@ -1,5 +1,7 @@
 """Settings screen (admin only): configurable alert thresholds + user management,
 matching the 'Settings' item in the sidebar spec."""
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -51,7 +53,9 @@ class GeneralSettingsTab(QWidget):
         self.receipt_format_input.setMaximumWidth(220)
         layout.addRow("Receipt/invoice format", self.receipt_format_input)
 
-        save_btn = QPushButton("💾  Save Settings")
+        save_btn = QPushButton("Save Settings")
+
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
         save_row = QHBoxLayout()
@@ -100,7 +104,9 @@ class RecoveryPinTab(QWidget):
         self.confirm_pin_input.setMaximumWidth(220)
         layout.addRow("Confirm PIN", self.confirm_pin_input)
 
-        save_btn = QPushButton("🔑  Set Recovery PIN")
+        save_btn = QPushButton("Set Recovery PIN")
+
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
         save_row = QHBoxLayout()
@@ -122,10 +128,10 @@ class RecoveryPinTab(QWidget):
 
     def _refresh_status(self):
         if auth.has_recovery_pin():
-            self.status_label.setText("✅  A Recovery PIN is currently set.")
+            self.status_label.setText("  A Recovery PIN is currently set.")
         else:
             self.status_label.setText(
-                "⚠️  No Recovery PIN is set. Password recovery is disabled until the shop owner configures one."
+                "No Recovery PIN is set. Password recovery is disabled until the shop owner configures one."
             )
 
     def _save(self):
@@ -155,7 +161,8 @@ class AuditLogTab(QWidget):
         header = QHBoxLayout()
         header.addWidget(QLabel("Recent activity (most recent first)"))
         header.addStretch()
-        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(icon(refresh_btn, "refresh"))
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
         layout.addLayout(header)

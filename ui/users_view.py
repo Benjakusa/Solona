@@ -1,5 +1,7 @@
 """Admin-only screen for managing user accounts (create, edit, deactivate, delete)."""
 from PySide6.QtCore import Qt
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -60,10 +62,12 @@ class UserEditDialog(QDialog):
         layout.addRow("", self.active_input)
 
         buttons = QHBoxLayout()
-        save_btn = QPushButton("💾  Save")
+        save_btn = QPushButton("Save")
+        save_btn.setIcon(icon(save_btn, "save"))
         save_btn.setProperty("success", True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("✖️  Cancel")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(icon(cancel_btn, "cancel"))
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
@@ -108,7 +112,8 @@ class UsersView(QWidget):
         title.setProperty("heading", True)
         header.addWidget(title)
         header.addStretch()
-        add_btn = QPushButton("➕  Add User")
+        add_btn = QPushButton("Add User")
+        add_btn.setIcon(icon(add_btn, "add"))
         add_btn.setProperty("success", True)
         add_btn.clicked.connect(self._add_user)
         header.addWidget(add_btn)
@@ -145,10 +150,12 @@ class UsersView(QWidget):
             actions_layout = QHBoxLayout()
             actions_layout.setContentsMargins(4, 2, 4, 2)
             actions_layout.setSpacing(6)
-            edit_btn = QPushButton("✏️  Edit")
+            edit_btn = QPushButton("Edit")
+            edit_btn.setIcon(icon(edit_btn, "edit"))
             edit_btn.setProperty("compact", True)
             edit_btn.clicked.connect(lambda _, u=user: self._edit_user(u))
-            delete_btn = QPushButton("🗑️  Delete")
+            delete_btn = QPushButton("Delete")
+            delete_btn.setIcon(icon(delete_btn, "delete"))
             delete_btn.setProperty("compact", True)
             delete_btn.setProperty("danger", True)
             delete_btn.clicked.connect(lambda _, u=user: self._delete_user(u))

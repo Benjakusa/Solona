@@ -6,6 +6,7 @@ from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QCha
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from ui.icons import icon
 
 from logic import auth, backup, inventory, reports, settings
 
@@ -13,7 +14,7 @@ from logic import auth, backup, inventory, reports, settings
 def _build_sales_trend_chart(trend: list[dict]) -> QChartView:
     bar_set = QBarSet("Revenue")
     bar_set.append([t["total"] for t in trend])
-    bar_set.setColor(QColor("#1565C0"))
+    bar_set.setColor(QColor("#38BDF8"))
 
     series = QBarSeries()
     series.append(bar_set)
@@ -63,6 +64,7 @@ class _AlertCard(QWidget):
 
         if count > 0:
             btn = QPushButton(button_text)
+            btn.setIcon(icon(btn, "info"))
             btn.clicked.connect(on_click)
             layout.addWidget(btn)
 
@@ -98,18 +100,18 @@ class DashboardView(QWidget):
         low_stock = inventory.low_stock_medicines()
         cards_row.addWidget(
             _AlertCard(
-                "⚠️  Low Stock Medicines", len(low_stock),
+                "Low Stock Medicines", len(low_stock),
                 ", ".join(m.name for m in low_stock[:4]) or "Everything is well stocked.",
-                "📦  View Inventory", self._go_to_inventory,
+                "View Inventory", self._go_to_inventory,
             )
         )
 
         expiring = inventory.expiring_medicines(settings.get_expiry_alert_days())
         cards_row.addWidget(
             _AlertCard(
-                f"⏳  Expiring within {settings.get_expiry_alert_days()} days", len(expiring),
+                f"Expiring within {settings.get_expiry_alert_days()} days", len(expiring),
                 ", ".join(m.name for m in expiring[:4]) or "No medicines expiring soon.",
-                "📦  View Inventory", self._go_to_inventory,
+                "View Inventory", self._go_to_inventory,
             )
         )
 
@@ -117,9 +119,9 @@ class DashboardView(QWidget):
         totals = today_report["totals"]
         cards_row.addWidget(
             _AlertCard(
-                "💰  Today's Sales", totals["count"],
+                "Today's Sales", totals["count"],
                 f"Total revenue: {totals['total_amount']:.2f}",
-                "🧾  View Billing", self._go_to_billing,
+                "View Billing", self._go_to_billing,
             )
         )
 
@@ -130,7 +132,8 @@ class DashboardView(QWidget):
 
         if self.current_user.is_admin:
             backup_row = QHBoxLayout()
-            backup_btn = QPushButton("💾  Backup Now")
+            backup_btn = QPushButton("Backup Now")
+            backup_btn.setIcon(icon(backup_btn, "save"))
             backup_btn.setProperty("success", True)
             backup_btn.clicked.connect(self._quick_backup)
             backup_row.addWidget(backup_btn)
@@ -151,7 +154,7 @@ class DashboardView(QWidget):
         try:
             record = backup.create_backup(backup_type="manual")
             QMessageBox.information(
-                self, "Backup Successful", f"Backup Successful ✅\n\nSaved to:\n{record.filename}"
+                self, "Backup Successful", f"Backup Successful \n\nSaved to:\n{record.filename}"
             )
         except Exception as e:
             QMessageBox.critical(self, "Backup Failed", str(e))

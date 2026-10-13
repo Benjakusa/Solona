@@ -1,6 +1,8 @@
 """Billing / POS screen: search medicine -> add to cart -> checkout -> print invoice."""
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
+from ui.icons import icon
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -43,7 +45,7 @@ class BillingView(QWidget):
         left.addWidget(title)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍📷  Scan barcode or type medicine name... (F2)")
+        self.search_input.setPlaceholderText("Scan barcode or type medicine name... (F2)")
         self.search_input.textChanged.connect(self.refresh_search)
         self.search_input.returnPressed.connect(self._handle_scan_or_enter)
         left.addWidget(self.search_input)
@@ -59,13 +61,14 @@ class BillingView(QWidget):
         self.qty_input.setValue(1)
         add_row.addWidget(QLabel("Qty:"))
         add_row.addWidget(self.qty_input)
-        self.pack_btn = QPushButton("📦  1 Pack")
+        self.pack_btn = QPushButton("1 Pack")
         self.pack_btn.setProperty("compact", True)
         self.pack_btn.setToolTip("Set quantity to a whole strip/box of the selected medicine")
         self.pack_btn.setEnabled(False)
         self.pack_btn.clicked.connect(self._set_qty_to_pack_size)
         add_row.addWidget(self.pack_btn)
-        add_btn = QPushButton("🛒  Add to Cart")
+        add_btn = QPushButton("Add to Cart")
+        add_btn.setIcon(icon(add_btn, "add"))
         add_btn.setProperty("success", True)
         add_btn.setToolTip("F4")
         add_btn.clicked.connect(self._add_selected_to_cart)
@@ -97,10 +100,10 @@ class BillingView(QWidget):
         self.customer_input = QComboBox()
         self.customer_input.currentIndexChanged.connect(self._on_customer_changed)
         customer_row.addWidget(self.customer_input)
-        refresh_cust_btn = QPushButton("🔄  Refresh")
+        refresh_cust_btn = QPushButton("Refresh")
         refresh_cust_btn.clicked.connect(self._reload_customers)
         customer_row.addWidget(refresh_cust_btn)
-        self.repeat_order_btn = QPushButton("🔁  Repeat Last Order")
+        self.repeat_order_btn = QPushButton("Repeat Last Order")
         self.repeat_order_btn.setToolTip("Reload this customer's most recent sale into the cart")
         self.repeat_order_btn.setEnabled(False)
         self.repeat_order_btn.clicked.connect(self._repeat_last_order)
@@ -159,12 +162,14 @@ class BillingView(QWidget):
         right.addWidget(self.totals_label)
 
         checkout_row = QHBoxLayout()
-        clear_btn = QPushButton("🗑️  Clear Cart")
+        clear_btn = QPushButton("Clear Cart")
+        clear_btn.setIcon(icon(clear_btn, "delete"))
         clear_btn.setProperty("danger", True)
         clear_btn.setToolTip("Ctrl+N")
         clear_btn.clicked.connect(self._clear_cart)
         checkout_row.addWidget(clear_btn)
-        checkout_btn = QPushButton("🧾  Checkout && Print Invoice")
+        checkout_btn = QPushButton("Checkout && Print Invoice")
+        checkout_btn.setIcon(icon(checkout_btn, "accept"))
         checkout_btn.setProperty("success", True)
         checkout_btn.setToolTip("Ctrl+S")
         checkout_btn.clicked.connect(self._checkout)
@@ -172,7 +177,7 @@ class BillingView(QWidget):
         right.addLayout(checkout_row)
 
         hotkeys_hint = QLabel(
-            "⌨️  F2 Search   |   F4 Add to Cart   |   Ctrl+D Remove Selected   |   "
+            "F2 Search   |   F4 Add to Cart   |   Ctrl+D Remove Selected   |   "
             "Ctrl+S Checkout   |   Ctrl+N Clear Cart"
         )
         hotkeys_hint.setProperty("subheading", True)
@@ -205,7 +210,7 @@ class BillingView(QWidget):
         """Called whenever this screen becomes visible (e.g. switching to it
         from another tab) so a customer/medicine added, edited or deleted
         elsewhere -- while this screen sat idle in the background -- shows up
-        immediately instead of only after manually pressing 🔄 Refresh."""
+        immediately instead of only after manually pressing Refresh."""
         self._reload_customers()
         self.refresh_search()
 
@@ -281,7 +286,7 @@ class BillingView(QWidget):
             return
         cust = customers.get_customer(customer_id)
         if cust and cust.has_credit:
-            self.credit_label.setText(f"⚠️  This customer already owes {cust.credit_balance:.2f} in udhaar.")
+            self.credit_label.setText(f"This customer already owes {cust.credit_balance:.2f} in udhaar.")
         else:
             self.credit_label.setText("")
 
@@ -340,10 +345,10 @@ class BillingView(QWidget):
         if 0 <= row < len(self._search_results) and self._search_results[row].units_per_pack > 1:
             pack_size = self._search_results[row].units_per_pack
             self.pack_btn.setEnabled(True)
-            self.pack_btn.setText(f"📦  1 Pack ({pack_size})")
+            self.pack_btn.setText(f"1 Pack ({pack_size})")
         else:
             self.pack_btn.setEnabled(False)
-            self.pack_btn.setText("📦  1 Pack")
+            self.pack_btn.setText("1 Pack")
 
     def _set_qty_to_pack_size(self):
         row = self.results_list.currentRow()
@@ -402,7 +407,8 @@ class BillingView(QWidget):
             self.cart_table.setItem(row, 1, QTableWidgetItem(str(item.quantity)))
             self.cart_table.setItem(row, 2, QTableWidgetItem(f"{item.unit_price:.2f}"))
             self.cart_table.setItem(row, 3, QTableWidgetItem(f"{item.subtotal:.2f}"))
-            remove_btn = QPushButton("🗑️  Remove")
+            remove_btn = QPushButton("Remove")
+            remove_btn.setIcon(icon(remove_btn, "delete"))
             remove_btn.setProperty("compact", True)
             remove_btn.setProperty("danger", True)
             remove_btn.clicked.connect(lambda _, mid=item.medicine_id: self._remove_from_cart(mid))
@@ -448,7 +454,7 @@ class BillingView(QWidget):
         remaining = round(self.cart.total - self.amount_paid_input.value(), 2)
         if remaining > 0.005:
             self.credit_preview_label.setText(
-                f"📒  {remaining:.2f} will be added to the selected customer's udhaar balance."
+                f"{remaining:.2f} will be added to the selected customer's udhaar balance."
             )
         else:
             self.credit_preview_label.setText("")
@@ -526,7 +532,7 @@ class BillingView(QWidget):
                 f"(Could not generate/print receipt: {e})"
             )
         if receipt["credit_amount"] > 0.005:
-            msg += f"\n\n📒 Udhaar added: {receipt['credit_amount']:.2f}"
+            msg += f"\n\nUdhaar added: {receipt['credit_amount']:.2f}"
         QMessageBox.information(self, "Sale Complete", msg)
 
         self._reload_customers()
