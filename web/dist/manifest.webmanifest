@@ -1,0 +1,10 @@
+{
+  "name": "SOLONA Pharmacy",
+  "short_name": "SOLONA",
+  "description": "Offline-capable pharmacy inventory and point of sale",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f8f5",
+  "theme_color": "#123f36",
+  "icons": []
+}

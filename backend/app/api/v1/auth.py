@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, current_principal, optional_principal
@@ -25,6 +26,11 @@ from app.schemas import (
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+# Verified when an account does not exist (or is inactive) so every login
+# attempt performs the same Argon2 work and response timing does not reveal
+# whether an email is registered.
+_DUMMY_PASSWORD_HASH = hash_password("solona-login-timing-equalization")
 
 PERMISSIONS = {
     "tenant:read": "View tenant configuration and summaries",
@@ -61,11 +67,9 @@ def issue_tokens(db: Session, user: User, family_id: UUID | None = None) -> Toke
 
 @router.post("/register-tenant", response_model=TenantRegistrationResponse, status_code=201)
 @limiter.limit("3/hour")
-def register_tenant(request: Request, payload: RegisterTenant, db: Session = Depends(get_db, scope="function")):
+def register_tenant(request: Request, response: Response, payload: RegisterTenant, db: Session = Depends(get_db, scope="function")):
     if db.scalar(select(User.id).where(User.email == payload.owner_email)):
         raise ApiError(409, "email_in_use", "An account with that email already exists.")
-    if db.scalar(select(Tenant.id).where(Tenant.slug == payload.tenant_slug)):
-        raise ApiError(409, "tenant_slug_in_use", "That tenant identifier is already in use.")
     plan = db.scalar(select(SubscriptionPlan).where(SubscriptionPlan.code == "trial", SubscriptionPlan.is_active.is_(True)))
     if plan is None:
         raise ApiError(503, "registration_unavailable", "Tenant registration is temporarily unavailable.")
@@ -74,7 +78,19 @@ def register_tenant(request: Request, payload: RegisterTenant, db: Session = Dep
     user = User(email=payload.owner_email, full_name=payload.owner_name.strip(), password_hash=hash_password(payload.owner_password))
     set_tenant_context(db, tenant.id)
     db.add_all([tenant, user])
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as error:
+        db.rollback()
+        # RLS hides other tenants from any pre-insert slug lookup, so slug
+        # and email uniqueness are enforced by the database; map the violated
+        # constraint back to a clear, non-leaky client error.
+        detail = str(error.orig)
+        if "uq_tenants_slug" in detail:
+            raise ApiError(409, "tenant_slug_in_use", "That tenant identifier is already in use.") from error
+        if "ix_users_email" in detail:
+            raise ApiError(409, "email_in_use", "An account with that email already exists.") from error
+        raise
     shop = Shop(tenant_id=tenant.id, name=payload.shop_name.strip(), code=payload.shop_code)
     db.add(shop)
     role_permissions = {
@@ -122,9 +138,11 @@ def register_tenant(request: Request, payload: RegisterTenant, db: Session = Dep
 
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")
-def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db, scope="function")):
+def login(request: Request, response: Response, payload: LoginRequest, db: Session = Depends(get_db, scope="function")):
     user = db.scalar(select(User).where(User.email == payload.email))
-    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
+    password_hash = user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
+    password_ok = verify_password(payload.password, password_hash)
+    if user is None or not user.is_active or not password_ok:
         raise ApiError(401, "invalid_credentials", "Email or password is incorrect.")
     return issue_tokens(db, user)
 
@@ -171,7 +189,7 @@ def list_workspaces(principal: Principal = Depends(current_principal), db: Sessi
 
 @router.post("/refresh", response_model=TokenResponse)
 @limiter.limit("10/minute")
-def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db, scope="function")):
+def refresh(request: Request, response: Response, payload: RefreshRequest, db: Session = Depends(get_db, scope="function")):
     token_hash = hash_token(payload.refresh_token)
     session = db.scalar(select(AuthSession).where(AuthSession.refresh_token_hash == token_hash).with_for_update())
     now = datetime.now(timezone.utc)
@@ -210,7 +228,7 @@ def logout(principal: Principal = Depends(current_principal), db: Session = Depe
 
 @router.post("/accept-invitation", response_model=OkResponse)
 @limiter.limit("10/hour")
-def accept_invitation(request: Request, payload: InvitationAccept, principal: Principal | None = Depends(optional_principal), db: Session = Depends(get_db, scope="function")):
+def accept_invitation(request: Request, response: Response, payload: InvitationAccept, principal: Principal | None = Depends(optional_principal), db: Session = Depends(get_db, scope="function")):
     try:
         tenant_id = UUID(payload.token.split(".", 1)[0])
     except (ValueError, IndexError):

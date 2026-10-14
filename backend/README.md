@@ -1,17 +1,20 @@
 # Backend API
 
-This is a separate FastAPI service. It does not replace the PySide6 desktop or its local SQLite database. The API uses PostgreSQL and is versioned under `/api/v1`.
+This FastAPI service powers the SOLONA Pharmacy web app. It uses PostgreSQL and exposes its versioned API under `/api/v1`. The browser PWA caches selected data locally and submits offline business events through the device sync API.
 
 ## Local setup
 
-Requires Python 3.11+ and PostgreSQL 14+. Create a dedicated empty database and a non-superuser application role. From this directory:
+Requires Python 3.11+ and PostgreSQL 14+. Check the interpreter before installing: some systems have Python 3.8 as `python` or `pip`, which is too old for this backend. Create a dedicated empty database and a non-superuser application role. From the repository root:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-python -m pip install -r requirements.txt
-cp .env.example .env
+python3.11 --version
+python3.11 -m venv backend/.venv
+source backend/.venv/bin/activate       # Windows: backend\.venv\Scripts\activate
+python -m pip install -r backend/requirements.txt
+cp backend/.env.example backend/.env
 ```
+
+On Windows, use `py -3.11 -m venv backend\.venv` and `backend\.venv\Scripts\activate`. If `python3.11` is not installed, install Python 3.11 or newer first. Use `python -m pip`, not bare `pip`, after activating the environment so pip installs for the selected interpreter.
 
 Edit `.env` locally. Set `DATABASE_URL` to the PostgreSQL DSN for the dedicated backend database. Generate a random `JWT_SECRET` with at least 32 bytes of entropy. Keep `.env`, database passwords, Redis credentials, and production credentials out of version control and logs. `backend/.gitignore` excludes `.env`.
 
@@ -35,7 +38,7 @@ Interactive API documentation is at `http://127.0.0.1:8000/api/v1/docs`; OpenAPI
 - Subscription billing uses a separate ledger and does not mutate retail sale payments. Configure `DARAJA_*` secrets in the environment/secret manager; never commit credentials. STK initiation remains pending until a correlated callback validates the checkout request, amount, phone, and receipt. Repeated idempotency keys do not initiate another prompt. Ambiguous timeouts are marked for reconciliation. A status-query response alone does not mark a subscription paid.
 - Start in `DARAJA_ENVIRONMENT=sandbox` with Safaricom-provided test credentials and simulator data. Callbacks require a public callback URL reachable by Safaricom; production requires HTTPS. Production credentials, shortcode/till/paybill configuration, Daraja product enablement and Safaricom go-live approval must be obtained directly from Safaricom before switching environments.
 - Daraja callbacks do not provide an application-verifiable signature in this adapter. The handler correlates provider IDs and validates amount/phone/receipt, deduplicates callback payloads, and flags mismatches. Restrict the public endpoint with rate limits and TLS; reconcile exceptional cases against Safaricom's records. Never infer payment success from a prompt request or customer statement.
-- Billing read access remains available during expiry. Subscription-protected writes, shop/device additions, and other plan-limited operations are denied after the configured grace period. Tenant records are retained; tenant owners can authenticate and export authorized data. Local offline pharmacy operations are governed by the desktop's own explicit offline policy.
+- Billing read access remains available during expiry. Subscription-protected writes, shop/device additions, and other plan-limited operations are denied after the configured grace period. Tenant records are retained; tenant owners can authenticate and export authorized data. Local offline pharmacy operations are governed by the web client's explicit offline policy in the root README.
 - Provision platform operators manually for an existing verified account with `python -m app.ops grant operator@example.com`; revoke with `python -m app.ops revoke operator@example.com`. These operators receive a metadata-only console API by default. Tenant audit details require an explicit reasoned support grant that expires within 60 minutes and are logged. No endpoint grants unrestricted access to tenant clinical/commercial records.
 - Device enrollment stores a hash and returns the credential once. Tenant admins and platform operators can revoke devices; platform operators can revoke account sessions. Production platform/operator accounts should use a hardened identity and MFA layer before go-live; MFA is not yet implemented here. See `OPERATIONS.md` for outage policy, restore drills, and Kenya deployment gates.
 

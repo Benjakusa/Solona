@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import secrets
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -102,7 +102,7 @@ def update_shop(tenant_id: UUID, shop_id: UUID, payload: ShopPatch, principal: P
 
 @router.post("/tenants/{tenant_id}/invitations", status_code=201)
 @limiter.limit("20/hour")
-def invite_user(request: Request, tenant_id: UUID, payload: InvitationCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+def invite_user(request: Request, response: Response, tenant_id: UUID, payload: InvitationCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     actor_membership = authorize_tenant(db, principal, tenant_id, "staff:manage")
     lock_tenant_memberships(db, tenant_id)
     actor_role = db.get(Role, actor_membership.role_id)
@@ -332,7 +332,7 @@ def assign_membership_shops(tenant_id: UUID, membership_id: UUID, shop_ids: list
 
 @router.post("/tenants/{tenant_id}/devices", status_code=201)
 @limiter.limit("20/hour")
-def register_device(request: Request, tenant_id: UUID, payload: DeviceCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+def register_device(request: Request, response: Response, tenant_id: UUID, payload: DeviceCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     membership = authorize_tenant(db, principal, tenant_id, "device:manage")
     authorize_shop(db, membership, payload.shop_id)
     require_subscription(db, tenant_id)

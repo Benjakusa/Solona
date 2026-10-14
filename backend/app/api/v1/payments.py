@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
@@ -64,7 +64,7 @@ def billing_summary(tenant_id: UUID, principal: Principal = Depends(current_prin
 
 @billing_router.post("/tenants/{tenant_id}/billing/stk-push", status_code=202)
 @limiter.limit("5/minute")
-def start_subscription_payment(request: Request, tenant_id: UUID, payload: StkPushRequest,
+def start_subscription_payment(request: Request, response: Response, tenant_id: UUID, payload: StkPushRequest,
                                principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "billing:manage")
     set_tenant_context(db, tenant_id)
@@ -123,7 +123,7 @@ def start_subscription_payment(request: Request, tenant_id: UUID, payload: StkPu
 
 @billing_router.post("/payments/daraja/callback")
 @limiter.limit("120/minute")
-def daraja_callback(request: Request, payload: dict, db: Session = Depends(get_db, scope="function")):
+def daraja_callback(request: Request, response: Response, payload: dict, db: Session = Depends(get_db, scope="function")):
     try:
         return daraja.process_callback(db, payload)
     except ValueError:
@@ -132,8 +132,8 @@ def daraja_callback(request: Request, payload: dict, db: Session = Depends(get_d
 
 @billing_router.post("/tenants/{tenant_id}/billing/payments/{payment_id}/reconcile")
 @limiter.limit("10/minute")
-def reconcile_subscription_payment(request: Request, tenant_id: UUID, payment_id: UUID,
-                                    principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
+def reconcile_subscription_payment(request: Request, response: Response, tenant_id: UUID, payment_id: UUID,
+                                   principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "billing:manage")
     set_tenant_context(db, tenant_id)
     payment = db.scalar(select(SubscriptionPayment).where(
@@ -159,7 +159,7 @@ def reconcile_subscription_payment(request: Request, tenant_id: UUID, payment_id
 
 @billing_router.post("/tenants/{tenant_id}/support-incidents", status_code=201)
 @limiter.limit("5/hour")
-def create_support_incident(request: Request, tenant_id: UUID, payload: SupportIncidentCreate,
+def create_support_incident(request: Request, response: Response, tenant_id: UUID, payload: SupportIncidentCreate,
                             principal: Principal = Depends(current_principal), db: Session = Depends(get_db, scope="function")):
     authorize_tenant(db, principal, tenant_id, "tenant:read")
     incident = SupportIncident(tenant_id=tenant_id, created_by=principal.user.id,

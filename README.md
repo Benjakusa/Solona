@@ -1,71 +1,44 @@
-# SOLONA Pharmacy
+# SOLONA Pharmacy Web
 
-SOLONA is an offline-capable pharmacy point-of-sale and operations application. The desktop client stores shop data in SQLite. A separate FastAPI/PostgreSQL service and a shop LAN coordinator provide optional synchronization foundations; they are separate deployments and do not automatically import or reconcile an existing shop database.
+SOLONA is an offline-capable pharmacy point-of-sale and inventory web app. The browser interface is a Progressive Web App (PWA); the FastAPI service and PostgreSQL database provide authenticated workspace operations and cross-device synchronization.
 
-> **Release status: internal evaluation only.** The hardening work is in progress. Do not use this repository as evidence that a pharmacy deployment is production-ready. See [Production readiness](PRODUCTION_READINESS.md), [Audit results](AUDIT_RESULTS.md), and [Decisions](DECISIONS.md) for verified changes and remaining release gates.
+## Current web workflows
 
-## What the desktop app does
+- Sign in and workspace/shop discovery
+- Dashboard with cached inventory and expiry/low-stock alerts
+- Inventory list backed by the cloud catalogue
+- POS using cached batches, with locally queued sale events
+- Browser device enrollment and event sync
 
-- Catalogue, batch stock, expiry tracking, barcode lookup, and stock alerts
-- Checkout, invoices, payment methods, customer credit, and partial payments
-- Returns, supplier purchases, customer and supplier records
-- Sales and operations reports, exports, receipts, and audit history
-- User administration, local backup and restore, and optional cloud/LAN sync clients
+Customer and supplier management, reports, returns, receipts, user administration, and backup/restore are not yet implemented in the web interface. The current web API does not expose all required endpoints for these workflows.
 
-Desktop permissions and business rules are still being hardened. Read [SECURITY_MODEL.md](SECURITY_MODEL.md) before relying on role controls.
+## Run the web app
 
-## Run from source
+Requirements: Node.js 20+ and npm.
 
-Requirements: Python 3.11 or newer. Printing is optional and depends on the host operating system and printer setup.
-
-```bash
-python -m venv .venv
-
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-
-# Linux or macOS
-source .venv/bin/activate
-
-python -m pip install -r requirements.txt
-python main.py
+```sh
+cd web
+npm install
+npm run dev
 ```
 
-The first launch initializes a local database and provisions a unique administrator password. For source runs, the temporary credential is printed once in the terminal. Sign in as `admin`, change that password, then configure and securely store a Recovery PIN in Settings.
+Set `VITE_API_URL` to the API origin if the service is hosted separately. Configure the API's `CORS_ORIGINS` to include the web origin. For a same-origin deployment, proxy `/api/v1` and `/health` to the FastAPI service and serve the Vite build from the web host.
 
-By default, the source database is `data/pharmacy.db`. Set `SOLONA_DB_PATH` to use another path. Packaged Windows builds use `%LOCALAPPDATA%\\PharmacyManagementSystem` for application data.
-
-## Optional backend
-
-The backend is a separate FastAPI service backed by PostgreSQL. It contains tenant, shop, staff, device, pharmacy-data, synchronization, subscription, and payment integration foundations. Follow [backend/README.md](backend/README.md) for setup and [backend/OPERATIONS.md](backend/OPERATIONS.md) for deployment considerations. Integration tests require a disposable PostgreSQL database configured with `TEST_DATABASE_URL`.
-
-## Optional shop LAN coordinator
-
-The coordinator owns its SQLite database; terminals communicate with it over HTTP and must not open its database file directly. It requires explicit enrollment and a shop-specific enrollment secret. Review [ARCHITECTURE.md](ARCHITECTURE.md), [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md), and [Production readiness](PRODUCTION_READINESS.md) before connecting terminals. Network security, reconciliation, and operational release gates remain open.
-
-## Backups and recovery
-
-Use the in-app Backup / Restore screen and follow [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md). Keep backups outside the application's install directory and verify recovery procedures with a copy of shop data before upgrades. Never restore one shop's database over another shop's live data.
-
-## Build for Windows
-
-Build on a clean Windows x64 machine. Install the project requirements, then run:
-
-```powershell
-pyinstaller --clean pharmacy_app.spec
+```sh
+npm run build
+npm run preview
 ```
 
-For the installer, install Inno Setup and run `build_windows.ps1`. Packaging, signing, installation, upgrade, printing, and recovery still need clean Windows validation; see [DEPLOYMENT.md](DEPLOYMENT.md).
+The PWA service worker and offline storage require HTTPS in production (or localhost during development). `web/public/sw.js` caches the app shell; IndexedDB caches workspace, inventory, and alert responses and stores pending sale events. Browser storage can be cleared by the user or browser, so it is not a replacement for a verified backup.
 
-## Repository map
+## Offline and sync behavior
 
-```text
-main.py       Desktop entry point
-ui/           PySide6 screens
-logic/        Desktop business logic
-database/    SQLite schema and initialization
-network/      Optional shop LAN coordinator
-backend/      FastAPI and PostgreSQL service
-```
+A user must sign in and load the workspace while online before cached screens can be reopened offline. Sales are saved locally first and queued with stable event and transaction IDs. The UI reports them as pending until the sync API acknowledges them as applied. Conflicts remain visible in the local queue for operator review.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [DATA_MODEL.md](DATA_MODEL.md), [TESTING.md](TESTING.md), and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for more detail.
+Each browser profile must be enrolled as a device while online. Device enrollment is available under Settings and requires the `device:manage` permission and an available subscription device slot. The backend validates device credentials and staff membership during replay. Do not clear site data or move the browser profile before the outbox syncs. Concurrent offline sales from different terminals can conflict when stock or prices change; offline sales are not guaranteed stock reservations.
+
+The browser stores access/refresh tokens and device credentials in localStorage to keep this initial PWA signed in and able to sync after browser restart. Use a trusted device, HTTPS, and a strong browser profile password. A production release should move credentials to a hardened browser storage design and complete security review.
+
+## Backend
+
+See [backend/README.md](backend/README.md) for PostgreSQL setup, migrations, API configuration, deployment requirements, and integration tests. The backend is the only server component; there is no Python desktop client or shop LAN coordinator in this repository's active application path.
